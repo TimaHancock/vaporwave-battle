@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    /* Emit nothing: Vite handles the actual transpiling. `tsc` is used
+       purely as a type checker (see `npm run typecheck`). */
+    "noEmit": true,
+
+    /* Target modern browsers. Vite will not downlevel past this. */
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+
+    /* Strictness. This is the whole reason TypeScript is in the stack --
+       do not relax these. Every flag here converts a class of silent
+       runtime bug into a readable compile error. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    /* Interop + ergonomics */
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "useDefineForClassFields": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Path alias so imports read `@/battle/damage` rather than
+       `../../battle/damage`. Mirrored in vite.config.ts. */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src", "scripts", "e2e", "vite.config.ts", "playwright.config.ts"]
+}

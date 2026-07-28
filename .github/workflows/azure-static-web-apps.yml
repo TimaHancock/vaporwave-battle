@@ -1,0 +1,105 @@
+name: Build and deploy
+
+# The workflow Azure generates for you does two things: build and deploy.
+# This one adds the gates in between. An AI-assisted project ships more
+# small changes than a hand-written one, so the pipeline is where you
+# enforce that "it looked fine" is not the only evidence a change works.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify_and_deploy:
+    if: github.event_name == 'push' || github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    name: Verify and deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v4
+        with:
+          # Must match .nvmrc. Version drift between your machine and CI
+          # produces the most confusing class of "works locally" bug.
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      # `npm ci` not `npm install`: installs exactly the lockfile, and
+      # fails if package.json and the lockfile disagree.
+      - name: Install dependencies
+        run: npm ci
+
+      # --- Gates. Each is cheap and each catches a different failure. ---
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: npm run e2e
+
+      - name: Build
+        run: npm run build
+
+      # Screenshots are captured as a build artifact rather than asserted
+      # on. Visual judgement stays human (or model) work -- but having the
+      # PNGs attached to every run means you can diff a regression after
+      # the fact without reproducing it locally.
+      - name: Capture reference screenshots
+        run: |
+          npx vite preview --port 4173 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4173/ >/dev/null && break
+            sleep 1
+          done
+          BASE_URL=http://localhost:4173 npm run shots
+        continue-on-error: true
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shots-${{ github.sha }}
+          path: shots/
+          retention-days: 14
+
+      # --- Deploy. Only reached if every gate above passed. ---
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: '/'
+          output_location: 'dist'
+          # The gates above already built and verified everything, so Oryx
+          # must not try to build it a second time with its own toolchain.
+          skip_app_build: true
+
+  close_preview:
+    # Tears down the temporary preview environment when a PR closes.
+    # Free tier allows three at a time, so leaking them will block you.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close preview environment
+    steps:
+      - name: Close
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: 'close'

@@ -1,0 +1,196 @@
+/*
+ * Design tokens + Phase 0 HUD.
+ *
+ * The palette here is the single source of truth for the interface. The
+ * 3D scene mirrors it in src/scene/battleScene.ts as hex numbers -- if you
+ * change a colour, change both or the sprite layer and the geometry will
+ * drift apart.
+ *
+ * Phase 0 styling is deliberately restrained. The finished layout (party
+ * cards, turn-order bar, damage numbers) is Phase 4. What exists here is
+ * only enough to prove the DOM-over-canvas architecture works.
+ *
+ * The display typeface is an open Phase 4 decision, deliberately not made
+ * here -- it should be chosen against real character art, not guessed at.
+ */
+
+:root {
+  /* Palette */
+  --void: #120327;
+  --void-deep: #08011a;
+  --horizon: #ff2d95;
+  --chrome: #d9c7ff;
+  --signal: #22e0ff;
+  --ember: #ff9a3c;
+
+  /* Utility face: tabular figures matter -- HP counters that jitter as
+     digits change width look cheap. */
+  --font-utility: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas,
+    monospace;
+
+  /* Spacing scale */
+  --gap-xs: 0.25rem;
+  --gap-sm: 0.5rem;
+  --gap-md: 1rem;
+  --gap-lg: 1.5rem;
+
+  --edge: 1px solid color-mix(in srgb, var(--signal) 45%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--void-deep);
+  color: var(--chrome);
+  font-family: var(--font-utility);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The canvas fills the viewport; the HUD floats above it. */
+#stage {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  /* Let clicks fall through to the canvas by default; individual
+     interactive elements opt back in. */
+  pointer-events: none;
+  padding: var(--gap-md);
+}
+
+/* ---------- Boss bar ---------- */
+
+.hud-boss {
+  position: absolute;
+  top: var(--gap-md);
+  right: var(--gap-md);
+  width: min(24rem, 40vw);
+  text-align: right;
+}
+
+.hud-boss__label {
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--chrome);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--signal) 60%, transparent);
+}
+
+.hud-boss__track {
+  margin-top: var(--gap-xs);
+  height: 0.75rem;
+  border: var(--edge);
+  background: color-mix(in srgb, var(--void) 80%, transparent);
+  overflow: hidden;
+}
+
+.hud-boss__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--horizon), var(--ember));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--horizon) 70%, transparent);
+  transition: width 400ms ease-out;
+}
+
+.hud-boss__readout {
+  margin-top: var(--gap-xs);
+  font-size: 0.8rem;
+  color: var(--ember);
+}
+
+/* ---------- Command menu ---------- */
+
+.hud-menu {
+  position: absolute;
+  left: var(--gap-md);
+  bottom: var(--gap-md);
+  min-width: 11rem;
+  padding: var(--gap-sm) var(--gap-md);
+  border: var(--edge);
+  background: color-mix(in srgb, var(--void) 88%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.hud-menu__title {
+  margin: 0 0 var(--gap-sm);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--chrome) 65%, transparent);
+}
+
+.hud-menu__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+}
+
+.hud-menu__item {
+  width: 100%;
+  padding: 0.2rem 0.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--chrome);
+  font: inherit;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.hud-menu__item:hover {
+  color: var(--signal);
+}
+
+.hud-menu__item.is-selected {
+  color: var(--void);
+  background: var(--signal);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--signal) 65%, transparent);
+}
+
+/* Keyboard focus must stay visible -- this is a menu-driven game and the
+   cursor is the primary interaction. */
+.hud-menu__item:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+
+/* ---------- Narration ---------- */
+
+.hud-narration {
+  position: absolute;
+  left: 13.5rem;
+  bottom: 1.6rem;
+  margin: 0;
+  padding: var(--gap-sm) var(--gap-md);
+  max-width: min(32rem, 50vw);
+  border: var(--edge);
+  background: color-mix(in srgb, var(--void) 88%, transparent);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- Accessibility floor ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-boss__fill {
+    transition: none;
+  }
+}

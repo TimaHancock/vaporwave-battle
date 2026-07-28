@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Apollyon — Battle</title>
+    <meta
+      name="description"
+      content="A turn-based battle against Apollyon."
+    />
+  </head>
+  <body>
+    <!--
+      Two layers, and the separation is architectural, not cosmetic:
+
+        #stage  — the three.js canvas. Environment geometry and, from
+                  Phase 4c, sprite billboards for the characters.
+
+        #hud    — ordinary DOM, layered on top. All menus, bars, text and
+                  numbers live here. Never render UI inside three.js.
+
+      Keeping the interface in the DOM is what lets the verification
+      harness read exact game state with selectors instead of guessing at
+      pixels. Roughly 80% of this game is interface, so that channel is
+      worth protecting.
+    -->
+    <canvas id="stage"></canvas>
+    <div id="hud"></div>
+
+    <noscript>
+      This game runs in the browser and needs JavaScript enabled.
+    </noscript>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.local
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Screenshot harness output.
+# Committing these is a defensible alternative: with a locked camera the
+# compositions are stable, so `git diff` on a PNG becomes a visual
+# regression signal. Pick one policy and stick to it.
+/shots/
+
+.DS_Store
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,64 @@
+/**
+ * The debug state bridge.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Claude Code cannot see the rendered canvas. A screenshot tells it what
+ * something *looks like*; this tells it what the game *believes*. When
+ * those two disagree, that gap is the bug.
+ *
+ * This is the single most important file for the agentic workflow. Keep it
+ * flat, keep it JSON-serialisable, and add to it whenever a new system
+ * gains state worth asserting on.
+ *
+ * The UI layer is deliberately NOT mirrored here -- the UI is real DOM, so
+ * the harness reads it directly with selectors, which is more accurate than
+ * anything this file could report.
+ */
+
+export interface DebugState {
+  /** Seconds of simulated game time elapsed. Set by the fixed step-to. */
+  time: number;
+  /** Seed the current battle was created with. */
+  seed: number;
+  /** Set true once the scene has finished its first render. */
+  ready: boolean;
+
+  camera: {
+    position: [number, number, number];
+    target: [number, number, number];
+    fov: number;
+  };
+
+  /** three.js renderer statistics. Sudden jumps here signal regressions. */
+  renderer: {
+    drawCalls: number;
+    triangles: number;
+    /** GPU allocations. Must return to baseline after a battle teardown. */
+    geometries: number;
+    textures: number;
+  };
+
+  /** Populated from Phase 1 onward. Empty in Phase 0. */
+  battle: {
+    phase: string;
+    round: number;
+    chain: number;
+    activeActor: string | null;
+  } | null;
+}
+
+declare global {
+  interface Window {
+    __debugState?: DebugState;
+  }
+}
+
+/**
+ * Publish state onto `window`. Called once per frame from the render loop.
+ * Cheap enough at 60fps; if it ever is not, throttle it rather than
+ * removing it.
+ */
+export function publishDebugState(state: DebugState): void {
+  window.__debugState = state;
+}
