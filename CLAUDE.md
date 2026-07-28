@@ -34,7 +34,7 @@ characters, DOM interface. One arena, one boss, one locked camera.
 | anything visual | `npm run shots`, then read the PNGs |
 | before committing | `npm run verify` |
 
-`npm run dev` must be running for `shots` and `e2e`.
+`npm run dev` must be running for `shots`. `e2e` starts its own server.
 
 ## Verification
 

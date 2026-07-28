@@ -85,11 +85,16 @@ jobs:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
-          app_location: '/'
-          output_location: 'dist'
           # The gates above already built and verified everything, so Oryx
-          # must not try to build it a second time with its own toolchain.
+          # must not build it a second time with its own toolchain.
           skip_app_build: true
+          skip_api_build: true
+          # With skip_app_build: true, app_location IS the built-output
+          # folder and output_location must be empty. Using
+          # app_location: '/' + output_location: 'dist' is the common
+          # mistake -- it uploads the repo root instead of the build.
+          app_location: 'dist'
+          output_location: ''
 
   close_preview:
     # Tears down the temporary preview environment when a PR closes.
