@@ -73,6 +73,15 @@ problem is lighting or camera, not loading.
 - **Grounding:** every sprite gets a contact shadow, or flat art reads as
   pasted onto the scene. Shadows use `depthWrite: false` and a lower
   `renderOrder` than sprites.
+- **The stage has hard bounds.** Platform top radius is 6;
+  `PLATFORM_SAFE_RADIUS` is 5.2. `layoutParty()` auto-fits spacing so no
+  party size can overflow -- do not bypass it by positioning sprites by
+  hand. A sprite past the lip stands on nothing and its shadow floats.
+- **Composition is authored for 16:9.** The camera's fov is vertical, so
+  horizontal coverage shrinks as the window narrows. Check any layout change
+  against `CANONICAL_ASPECT`; the e2e suite pins its viewport to match.
+  Narrower aspects clip the outermost party member -- known, tracked as the
+  mobile layout question.
 - **Coplanar geometry z-fights.** The contact shadow sits at `y = 0.012`,
   not `0`, for this reason.
 - Azure free tier caps the site at 250 MB. Compress textures (KTX2) and

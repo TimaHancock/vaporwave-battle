@@ -52,6 +52,23 @@ jobs:
       - name: End-to-end tests
         run: npm run e2e
 
+      # When e2e fails, the log gives you an assertion message and nothing
+      # else. playwright.config.ts records a trace on first retry -- but the
+      # traces are written to the runner's disk and thrown away with it
+      # unless they are uploaded. Without this step a CI-only failure is
+      # very hard to investigate.
+      #   npx playwright show-trace <downloaded>/trace.zip
+      - name: Upload Playwright traces on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces-${{ github.sha }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Build
         run: npm run build
 
@@ -76,6 +93,11 @@ jobs:
           name: shots-${{ github.sha }}
           path: shots/
           retention-days: 14
+          # This step runs with `always()`, so it also fires when an earlier
+          # gate failed and the screenshot step never ran. Without this it
+          # emits a confusing "No files were found" warning that looks like
+          # a second failure rather than a consequence of the first.
+          if-no-files-found: ignore
 
       # --- Deploy. Only reached if every gate above passed. ---
 

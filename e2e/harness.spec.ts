@@ -141,19 +141,63 @@ test.describe('sprite billboard layer', () => {
     expect(byOrder.map((s) => s.name)).toEqual(byDepth.map((s) => s.name));
   });
 
-  test('every sprite head projects on-screen for DOM damage numbers', async ({ page }) => {
-    await page.goto('/?seed=1337&time=0');
-    await page.waitForFunction(() => window.__debugState?.ready === true);
+  /* The camera has a fixed vertical fov, so horizontal coverage shrinks as
+     the window narrows -- a formation that fits at 16:9 can run off the
+     left edge at 4:3. Pinning the viewport makes this assertion measure the
+     layout rather than whatever viewport default is in effect.
 
-    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+     The composition is authored for 16:9. Narrower aspects will clip the
+     outermost party member; that is a known constraint, tracked as the
+     mobile layout question rather than papered over by loosening this. */
+  test.describe('at the canonical 16:9 viewport', () => {
+    test.use({ viewport: { width: 1280, height: 720 } });
 
-    for (const sprite of sprites) {
-      const [x, y] = sprite.headScreen;
-      expect(x).toBeGreaterThan(0);
-      expect(x).toBeLessThan(1);
-      expect(y).toBeGreaterThan(0);
-      expect(y).toBeLessThan(1);
-    }
+    test('every sprite head projects on-screen with margin', async ({ page }) => {
+      await page.goto('/?seed=1337&time=0');
+      await page.waitForFunction(() => window.__debugState?.ready === true);
+
+      const sprites = await page.evaluate(() => window.__debugState!.sprites);
+      expect(sprites.length).toBeGreaterThan(0);
+
+      for (const sprite of sprites) {
+        const [x, y] = sprite.headScreen;
+        /* Margin rather than a bare > 0: a head sitting exactly on the frame
+           edge is already a composition bug, and a damage number anchored
+           there would render half off-screen. */
+        expect(x, `${sprite.name} head x`).toBeGreaterThan(0.03);
+        expect(x, `${sprite.name} head x`).toBeLessThan(0.97);
+        expect(y, `${sprite.name} head y`).toBeGreaterThan(0.03);
+        expect(y, `${sprite.name} head y`).toBeLessThan(0.97);
+      }
+    });
+
+    test('party occupies the left of frame, leaving room for the boss', async ({
+      page,
+    }) => {
+      await page.goto('/?seed=1337&time=0');
+      await page.waitForFunction(() => window.__debugState?.ready === true);
+
+      const sprites = await page.evaluate(() => window.__debugState!.sprites);
+      const rightmost = Math.max(...sprites.map((sprite) => sprite.headScreen[0]));
+
+      /* Composition contract from the reference art: party left, boss right. */
+      expect(rightmost).toBeLessThan(0.6);
+    });
+
+    test('every sprite stands on the platform, not off its edge', async ({ page }) => {
+      await page.goto('/?seed=1337&time=0');
+      await page.waitForFunction(() => window.__debugState?.ready === true);
+
+      const sprites = await page.evaluate(() => window.__debugState!.sprites);
+
+      /* The failure the original CI run did NOT catch: a sprite can be on
+         screen and still be standing on empty space beyond the platform lip,
+         with its contact shadow floating. Platform top radius is 6. */
+      for (const sprite of sprites) {
+        const [x, , z] = sprite.position;
+        expect(Math.hypot(x, z), `${sprite.name} distance from centre`).toBeLessThan(5.2);
+      }
+    });
   });
 
   test('cast teardown returns GPU memory to baseline', async ({ page }) => {

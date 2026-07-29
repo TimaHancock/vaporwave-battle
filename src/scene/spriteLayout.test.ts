@@ -5,9 +5,45 @@ import {
   layoutParty,
   assignRenderOrders,
   contactShadowSize,
+  formationExtent,
   SPRITE_RENDER_ORDER_BASE,
   DEFAULT_PARTY_LAYOUT,
+  PLATFORM_RADIUS,
+  PLATFORM_SAFE_RADIUS,
+  CANONICAL_ASPECT,
 } from './spriteLayout';
+
+/**
+ * Minimal perspective projection, replicating what three.js does to a world
+ * point, without importing three.js.
+ *
+ * REGRESSION GUARD. A formation that overflows the camera frustum used to be
+ * caught only by an end-to-end test -- which meant a five-minute CI round
+ * trip to learn something that is pure arithmetic. These run in
+ * milliseconds.
+ *
+ * Camera values mirror CAMERA in battleScene.ts.
+ */
+function projectedScreenX(worldX: number, worldZ: number, aspect: number): number {
+  const camY = 3.2;
+  const camZ = 11;
+  const targetY = 1.6;
+  const fovDeg = 32;
+
+  // Camera pitches down slightly to frame the target.
+  const pitch = Math.atan2(camY - targetY, camZ);
+
+  // Depth along the camera's view axis.
+  const dz = camZ - worldZ;
+  const dy = camY - 2.2; // sprite head height
+  const depth = dz * Math.cos(pitch) + dy * Math.sin(pitch);
+
+  const halfHeight = Math.tan((fovDeg * Math.PI) / 360) * depth;
+  const halfWidth = halfHeight * aspect;
+
+  // Normalised device x, then remapped to 0..1 screen space.
+  return (worldX / halfWidth + 1) / 2;
+}
 
 describe('spriteDimensions', () => {
   it('preserves the source image aspect ratio', () => {
@@ -67,10 +103,13 @@ describe('layoutParty', () => {
     }
   });
 
-  it('honours the requested spacing between neighbours', () => {
-    const positions = layoutParty(5, { ...DEFAULT_PARTY_LAYOUT, spacing: 2 });
+  it('honours the requested spacing when it fits on the platform', () => {
+    // 1.4 keeps a 5-member party inside PLATFORM_SAFE_RADIUS, so it is
+    // passed through untouched. A request of 2.0 would be auto-fitted down
+    // instead -- covered in the 'spacing auto-fit' block below.
+    const positions = layoutParty(5, { ...DEFAULT_PARTY_LAYOUT, spacing: 1.4 });
     for (let i = 1; i < positions.length; i++) {
-      expect(positions[i]!.x - positions[i - 1]!.x).toBeCloseTo(2);
+      expect(positions[i]!.x - positions[i - 1]!.x).toBeCloseTo(1.4);
     }
   });
 
@@ -147,5 +186,131 @@ describe('contactShadowSize', () => {
     const small = contactShadowSize(1);
     const large = contactShadowSize(2);
     expect(large.width).toBeCloseTo(small.width * 2);
+  });
+});
+
+
+describe('stage bounds', () => {
+  it('keeps the whole default party on the platform', () => {
+    // The bug this exists to prevent: the previous defaults put the
+    // outermost member 6.12 from centre on a radius-6 platform, standing
+    // on empty space with its contact shadow spilling over the edge.
+    const extent = formationExtent(layoutParty(5));
+    expect(extent).toBeLessThan(PLATFORM_SAFE_RADIUS);
+    expect(extent).toBeLessThan(PLATFORM_RADIUS);
+  });
+
+  it('keeps larger parties on the platform too', () => {
+    for (const count of [1, 2, 3, 4, 5, 6]) {
+      expect(formationExtent(layoutParty(count))).toBeLessThan(PLATFORM_SAFE_RADIUS);
+    }
+  });
+
+  it('keeps every party member inside the camera frustum at 16:9', () => {
+    // The exact assertion that failed in CI, moved to where feedback is
+    // measured in milliseconds rather than minutes.
+    for (const position of layoutParty(5)) {
+      const screenX = projectedScreenX(position.x, position.z, CANONICAL_ASPECT);
+      expect(screenX).toBeGreaterThan(0.03);
+      expect(screenX).toBeLessThan(0.97);
+    }
+  });
+
+  it('leaves the right half of frame clear for the boss', () => {
+    // Composition contract, matching the reference art: party occupies the
+    // left of frame, boss the right.
+    const screenXs = layoutParty(5).map((position) =>
+      projectedScreenX(position.x, position.z, CANONICAL_ASPECT),
+    );
+    expect(Math.max(...screenXs)).toBeLessThan(0.6);
+  });
+
+  it('would have overflowed with the parameters that broke CI', () => {
+    // A guard that cannot fail on any input is not a guard. This computes
+    // the raw formula the way it worked before auto-fitting existed, and
+    // confirms it really did put a sprite off the platform and off screen.
+    const centreX = -2.6;
+    const centreZ = -0.4;
+    const spacing = 1.75;
+    const arcDepth = 0.9;
+    const raw = [0, 1, 2, 3, 4].map((index) => {
+      const offset = index - 2;
+      const n = offset / 2;
+      return { x: centreX + offset * spacing, y: 0, z: centreZ + arcDepth * n * n };
+    });
+
+    expect(formationExtent(raw)).toBeGreaterThan(PLATFORM_RADIUS);
+
+    const outermost = raw[0]!;
+    // The exact value CI reported: -0.0679.
+    expect(projectedScreenX(outermost.x, outermost.z, CANONICAL_ASPECT)).toBeLessThan(0);
+  });
+
+  it('auto-fits those same parameters back onto the platform', () => {
+    // Passing the old broken options in today must produce a valid layout,
+    // because the constraint is enforced inside layoutParty rather than
+    // relying on the defaults being correct.
+    const fitted = layoutParty(5, {
+      centreX: -2.6,
+      centreZ: -0.4,
+      spacing: 1.75,
+      arcDepth: 0.9,
+    });
+    expect(formationExtent(fitted)).toBeLessThanOrEqual(PLATFORM_SAFE_RADIUS + 1e-9);
+    for (const position of fitted) {
+      expect(projectedScreenX(position.x, position.z, CANONICAL_ASPECT)).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('formationExtent', () => {
+  it('is zero for an empty formation', () => {
+    expect(formationExtent([])).toBe(0);
+  });
+
+  it('measures from the platform centre, not the formation centre', () => {
+    expect(formationExtent([{ x: 3, y: 0, z: 4 }])).toBeCloseTo(5);
+  });
+});
+
+describe('spacing auto-fit', () => {
+  it('honours the requested spacing when it already fits', () => {
+    const positions = layoutParty(5);
+    const gap = positions[1]!.x - positions[0]!.x;
+    expect(gap).toBeCloseTo(DEFAULT_PARTY_LAYOUT.spacing, 6);
+  });
+
+  it('shrinks spacing rather than letting a large party overflow', () => {
+    // Eight members at the default 1.25 spacing would span 8.75 units and
+    // walk straight off the platform. The formation must compress instead.
+    const positions = layoutParty(8);
+    expect(formationExtent(positions)).toBeLessThanOrEqual(PLATFORM_SAFE_RADIUS + 1e-9);
+
+    const gap = positions[1]!.x - positions[0]!.x;
+    expect(gap).toBeLessThan(DEFAULT_PARTY_LAYOUT.spacing);
+    expect(gap).toBeGreaterThan(0);
+  });
+
+  it('keeps any plausible party size on the platform', () => {
+    for (let count = 1; count <= 12; count++) {
+      expect(formationExtent(layoutParty(count))).toBeLessThanOrEqual(
+        PLATFORM_SAFE_RADIUS + 1e-9,
+      );
+    }
+  });
+
+  it('stays symmetric after auto-fitting', () => {
+    const positions = layoutParty(8);
+    for (let i = 0; i < 8; i++) {
+      const left = positions[i]!.x - DEFAULT_PARTY_LAYOUT.centreX;
+      const right = positions[7 - i]!.x - DEFAULT_PARTY_LAYOUT.centreX;
+      expect(left).toBeCloseTo(-right, 10);
+    }
+  });
+
+  it('refuses a formation centre that is off the platform', () => {
+    expect(() =>
+      layoutParty(3, { ...DEFAULT_PARTY_LAYOUT, centreX: -12 }),
+    ).toThrow(/off the platform/);
   });
 });
