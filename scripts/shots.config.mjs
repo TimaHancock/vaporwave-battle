@@ -34,4 +34,13 @@ export const SHOTS = [
     seed: 1337,
     time: 2.0,
   },
+  {
+    name: 'cast_grounded',
+    description:
+      'Five placeholder billboards with contact shadows. Check the silhouette ' +
+      'edges for halo, and that each figure reads as standing ON the platform ' +
+      'rather than floating above it.',
+    seed: 1337,
+    time: 1.0,
+  },
 ];

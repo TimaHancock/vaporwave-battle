@@ -13,6 +13,8 @@
 
 import * as THREE from 'three';
 import type { Rng } from '../rng';
+import { createCharacterSprite, type CharacterSprite } from './sprite';
+import { assignRenderOrders, type Vec3 } from './spriteLayout';
 
 /* ------------------------------------------------------------------ */
 /* Camera rig -- CANONICAL. Do not change without updating CLAUDE.md.  */
@@ -37,12 +39,36 @@ export const CAMERA = {
 /* Palette -- mirrored in style.css. Change both or neither.           */
 /* ------------------------------------------------------------------ */
 
-const PALETTE = {
-  void: 0x120327,
-  horizon: 0xff2d95,
+/**
+ * Sampled directly from the SideQuest Cyber site design rather than chosen
+ * by eye. Two properties of that sample drive everything here:
+ *
+ *   1. The dark ground is a WARM plum (R > B), not a cool indigo. An
+ *      indigo backdrop reads as a different brand the moment the game sits
+ *      next to the site.
+ *
+ *   2. Cyan does not appear at all in the site's dominant colours -- it
+ *      exists only as thin circuit traces on the clouds. It is an accent,
+ *      not a co-lead with magenta. Use it for lines, not for fills or
+ *      broad lighting.
+ */
+export const PALETTE = {
+  /** Deepest background plum. */
+  void: 0x13060d,
+  /** Mid plum, the dominant field colour. */
+  plum: 0x29081e,
+  /** Hot magenta -- the brand's primary accent. */
+  horizon: 0xc61e82,
+  /** Secondary pink, for bands and softer accents. */
+  rose: 0xb02961,
+  /** Sunset orange, upper half of the sun gradient. */
+  ember: 0xe8873a,
+  /** Deep burnt orange, where the sun meets the magenta. */
+  emberDeep: 0x9d461e,
+  /** Pale lavender-white -- chrome surfaces and the key light. */
   chrome: 0xd9c7ff,
+  /** Cyan. THIN LINE ACCENTS ONLY. Never a fill, never a broad light. */
   signal: 0x22e0ff,
-  ember: 0xff9a3c,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -85,10 +111,34 @@ export class DisposalRegistry {
 /* Scene construction                                                  */
 /* ------------------------------------------------------------------ */
 
+/** One character to place on the platform. */
+export interface CastEntry {
+  name: string;
+  texture: THREE.Texture;
+  /** World height. ~2.2 reads as an adult human against this platform. */
+  worldHeight: number;
+  /** Feet position. y is ignored; sprites are always grounded. */
+  position: Vec3;
+  /** Override the default alpha cutoff for tricky art. */
+  alphaTest?: number;
+}
+
 export interface BattleScene {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   registry: DisposalRegistry;
+  /** Every character sprite currently on the platform. */
+  readonly sprites: readonly CharacterSprite[];
+  /**
+   * Place a cast on the platform, replacing any existing one.
+   *
+   * Draw order is computed across the whole cast at once rather than per
+   * sprite -- render order is a property of the group, and assigning it
+   * incrementally is how sprites end up flickering past each other.
+   */
+  spawnCast(entries: readonly CastEntry[]): readonly CharacterSprite[];
+  /** Remove and dispose the current cast. Leaves the environment intact. */
+  clearCast(): void;
   /** Advance ambient animation to an absolute time, in seconds. */
   update(elapsedSeconds: number): void;
   dispose(): void;
@@ -117,7 +167,10 @@ export function createBattleScene(rng: Rng): BattleScene {
   /* --- Grid ocean ------------------------------------------------- */
   /* THREE.GridHelper is a LineSegments, so it renders as pure emissive
      colour with no lighting -- exactly the look wanted, and free. */
-  const grid = new THREE.GridHelper(160, 80, PALETTE.horizon, PALETTE.signal);
+  /* Centre line magenta, minor lines rose. Cyan was previously the minor
+     colour here and it over-weighted the palette -- the site uses cyan
+     only for thin circuit traces, never as a structural colour. */
+  const grid = new THREE.GridHelper(160, 80, PALETTE.horizon, PALETTE.rose);
   grid.position.set(0, 0, -20);
   const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
   for (const material of gridMaterials) {
@@ -199,10 +252,26 @@ export function createBattleScene(rng: Rng): BattleScene {
     scene.add(die);
   }
 
-  /* --- Lighting ---------------------------------------------------- */
-  /* KEY LIGHT DIRECTION IS A CONTRACT. Character illustrations arriving in
-     Phase 4c must be drawn lit from this direction, or the sprites will
-     read as pasted on. Front-left, slightly above. */
+  /* --- Lighting ----------------------------------------------------
+   *
+   * THIS RIG IS A CONTRACT WITH THE CHARACTER ART.
+   *
+   * Sprites use MeshBasicMaterial, so these lights never touch them --
+   * the lighting is painted into the image. That makes the agreement
+   * between this rig and the art a matter of authoring discipline rather
+   * than something the renderer can enforce, which is exactly why it is
+   * written down in three places: here, in CLAUDE.md, and in the image
+   * generation prompt.
+   *
+   * The rig in words, which is what the art prompt encodes:
+   *   Key    -- pale lavender-white, upper FRONT-LEFT of frame, ~40 deg
+   *             elevation. Left-facing surfaces lit, right side in shadow.
+   *   Rim R  -- hot magenta along the RIGHT silhouette edge.
+   *   Rim L  -- cyan along the LEFT silhouette edge, thin.
+   *
+   * If you change a light here, change the prompt. Otherwise every
+   * character generated afterwards will disagree with the environment.
+   */
   const key = new THREE.DirectionalLight(PALETTE.chrome, 2.2);
   key.position.set(-4, 6, 6);
   scene.add(key);
@@ -211,16 +280,62 @@ export function createBattleScene(rng: Rng): BattleScene {
   rimMagenta.position.set(6, 2, -4);
   scene.add(rimMagenta);
 
-  const rimCyan = new THREE.DirectionalLight(PALETTE.signal, 1.2);
+  /* Cyan is an accent, not a co-lead -- dimmed to match how sparingly the
+     site design uses it. It should catch an edge, not tint the scene. */
+  const rimCyan = new THREE.DirectionalLight(PALETTE.signal, 0.55);
   rimCyan.position.set(-6, 1, -5);
   scene.add(rimCyan);
 
   scene.add(new THREE.AmbientLight(PALETTE.ember, 0.25));
 
+  /* --- Character cast ----------------------------------------------- */
+
+  /* Sprites are tracked separately from the environment registry because
+     they have a different lifetime: the cast is replaced when a battle
+     restarts, while the arena persists. Mixing the two is how a teardown
+     ends up either leaking sprite textures or destroying the platform. */
+  const cast: CharacterSprite[] = [];
+
+  const clearCast = (): void => {
+    for (const sprite of cast) {
+      scene.remove(sprite.group);
+      sprite.dispose();
+    }
+    cast.length = 0;
+  };
+
   return {
     scene,
     camera,
     registry,
+
+    get sprites(): readonly CharacterSprite[] {
+      return cast;
+    },
+
+    spawnCast(entries: readonly CastEntry[]) {
+      clearCast();
+
+      /* One pass over the whole cast so draw order is globally consistent. */
+      const orders = assignRenderOrders(entries.map((entry) => entry.position));
+
+      entries.forEach((entry, index) => {
+        const sprite = createCharacterSprite({
+          texture: entry.texture,
+          worldHeight: entry.worldHeight,
+          position: entry.position,
+          renderOrder: orders[index] ?? 0,
+          name: entry.name,
+          ...(entry.alphaTest === undefined ? {} : { alphaTest: entry.alphaTest }),
+        });
+        cast.push(sprite);
+        scene.add(sprite.group);
+      });
+
+      return cast;
+    },
+
+    clearCast,
 
     update(elapsedSeconds: number) {
       for (const die of dice) {
@@ -234,6 +349,9 @@ export function createBattleScene(rng: Rng): BattleScene {
     },
 
     dispose() {
+      /* Cast first: its textures are not in the environment registry, so
+         disposing the registry alone would leak every character texture. */
+      clearCast();
       scene.clear();
       registry.disposeAll();
     },

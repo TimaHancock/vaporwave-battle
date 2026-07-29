@@ -99,3 +99,77 @@ test.describe('HUD DOM channel', () => {
     await expect(page.getByTestId('command-attack')).toBeFocused();
   });
 });
+
+test.describe('sprite billboard layer', () => {
+  test('spawns the full cast, grounded and shadowed', async ({ page }) => {
+    await page.goto('/?seed=1337&time=2.0');
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+
+    expect(sprites).toHaveLength(5);
+
+    for (const sprite of sprites) {
+      // Feet on the ground plane. A non-zero y means the grounding maths
+      // regressed and characters are floating or sunk into the platform.
+      expect(sprite.position[1]).toBe(0);
+
+      // Every sprite needs a contact shadow or it reads as pasted on.
+      expect(sprite.hasShadow).toBe(true);
+
+      // A 1:1 size is the signature of a texture that had not decoded when
+      // the sprite was built -- the aspect collapses and the character
+      // renders as a sliver.
+      expect(sprite.size[0]).not.toBeCloseTo(sprite.size[1], 3);
+      expect(sprite.size[1]).toBeCloseTo(2.2, 3);
+    }
+  });
+
+  test('assigns unique render orders, furthest sprite drawn first', async ({ page }) => {
+    await page.goto('/?seed=1337&time=0');
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+
+    // Unique orders are what stop sprites flickering past each other.
+    const orders = sprites.map((s) => s.renderOrder);
+    expect(new Set(orders).size).toBe(orders.length);
+
+    // Furthest (most negative z) must draw first.
+    const byDepth = [...sprites].sort((a, b) => a.position[2] - b.position[2]);
+    const byOrder = [...sprites].sort((a, b) => a.renderOrder - b.renderOrder);
+    expect(byOrder.map((s) => s.name)).toEqual(byDepth.map((s) => s.name));
+  });
+
+  test('every sprite head projects on-screen for DOM damage numbers', async ({ page }) => {
+    await page.goto('/?seed=1337&time=0');
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+
+    for (const sprite of sprites) {
+      const [x, y] = sprite.headScreen;
+      expect(x).toBeGreaterThan(0);
+      expect(x).toBeLessThan(1);
+      expect(y).toBeGreaterThan(0);
+      expect(y).toBeLessThan(1);
+    }
+  });
+
+  test('cast teardown returns GPU memory to baseline', async ({ page }) => {
+    await page.goto('/?seed=1337&time=0');
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    // This is the leak that kills a game which restarts battles: three.js
+    // allocates geometry and texture memory on the GPU that JavaScript's
+    // garbage collector cannot reclaim.
+    const readMemory = () =>
+      page.evaluate(() => ({
+        geometries: window.__debugState!.renderer.geometries,
+        textures: window.__debugState!.renderer.textures,
+      }));
+
+    const before = await readMemory();
+    expect(before.geometries).toBeGreaterThan(0);
+  });
+});

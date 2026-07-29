@@ -15,13 +15,23 @@
  */
 
 :root {
-  /* Palette */
-  --void: #120327;
-  --void-deep: #08011a;
-  --horizon: #ff2d95;
+  /* Palette -- sampled from the SideQuest Cyber site design, not chosen
+     by eye. The dark ground is a WARM plum (R > B), not a cool indigo;
+     using indigo makes the game read as a different brand the moment it
+     sits beside the site. Mirrored in src/scene/battleScene.ts as hex
+     numbers -- change both or neither. */
+  --void: #13060d;
+  --void-deep: #090408;
+  --plum: #29081e;
+  --horizon: #c61e82;
+  --rose: #b02961;
+  --ember: #e8873a;
+  --ember-deep: #9d461e;
   --chrome: #d9c7ff;
+  /* Cyan is a THIN LINE ACCENT only. It does not appear anywhere in the
+     site's dominant colours -- it exists purely as circuit traces. Never
+     use it as a fill or a broad surface. */
   --signal: #22e0ff;
-  --ember: #ff9a3c;
 
   /* Utility face: tabular figures matter -- HP counters that jitter as
      digits change width look cheap. */

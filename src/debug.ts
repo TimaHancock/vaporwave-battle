@@ -39,6 +39,29 @@ export interface DebugState {
     textures: number;
   };
 
+  /**
+   * Character sprites currently on the platform.
+   *
+   * This is the channel that makes the sprite layer verifiable without
+   * looking at a picture. A screenshot can show you a missing character;
+   * only this can tell you whether it is missing because the texture
+   * failed to load, because the aspect ratio collapsed, or because the
+   * draw order put it behind the platform.
+   */
+  sprites: Array<{
+    name: string;
+    /** Feet position in world space. */
+    position: [number, number, number];
+    /** Derived from the texture aspect -- a 1:1 ratio usually means the
+        texture had not decoded when the sprite was built. */
+    size: [number, number];
+    renderOrder: number;
+    /** Normalised 0..1 screen position of the sprite's head, for placing
+        DOM damage numbers. Outside 0..1 means off-screen. */
+    headScreen: [number, number];
+    hasShadow: boolean;
+  }>;
+
   /** Populated from Phase 1 onward. Empty in Phase 0. */
   battle: {
     phase: string;

@@ -16,6 +16,8 @@
 import './style.css';
 import * as THREE from 'three';
 import { createBattleScene, CAMERA } from './scene/battleScene';
+import { createPlaceholderCharacterTexture } from './scene/sprite';
+import { layoutParty } from './scene/spriteLayout';
 import { renderHud, type HudModel } from './ui/hud';
 import { createRng, seedFromLocation } from './rng';
 import { publishDebugState, type DebugState } from './debug';
@@ -68,6 +70,31 @@ renderer.toneMappingExposure = 1.15;
 const battle = createBattleScene(rng);
 
 /* ---------------------------------------------------------------- */
+/* Character cast                                                    */
+/* ---------------------------------------------------------------- */
+
+/* Placeholder sprites, so the billboard pipeline -- aspect handling,
+   alpha cutoff, draw order, contact shadows -- can be verified today,
+   before any character art exists.
+ *
+ * To swap in real art, replace createPlaceholderCharacterTexture() with
+ * `await loadCharacterTexture('./characters/kira.png')`. Nothing else in
+ * this block changes.
+ *
+ * Party count is 5 to match the silhouettes in the site hero. */
+const PARTY_NAMES = ['kira', 'neo', 'vex', 'lyra', 'sage'] as const;
+const partyPositions = layoutParty(PARTY_NAMES.length);
+
+battle.spawnCast(
+  PARTY_NAMES.map((name, index) => ({
+    name,
+    texture: createPlaceholderCharacterTexture(),
+    worldHeight: 2.2,
+    position: partyPositions[index] ?? { x: 0, y: 0, z: 0 },
+  })),
+);
+
+/* ---------------------------------------------------------------- */
 /* HUD (placeholder data -- real battle state arrives in Phase 1)    */
 /* ---------------------------------------------------------------- */
 
@@ -118,6 +145,28 @@ function snapshot(time: number, ready: boolean): DebugState {
       geometries: renderer.info.memory.geometries,
       textures: renderer.info.memory.textures,
     },
+    sprites: battle.sprites.map((sprite) => {
+      const head = sprite.headScreenPosition(battle.camera);
+      return {
+        name: sprite.name,
+        position: [
+          sprite.group.position.x,
+          sprite.group.position.y,
+          sprite.group.position.z,
+        ] as [number, number, number],
+        size: [
+          Number(sprite.size.width.toFixed(4)),
+          Number(sprite.size.height.toFixed(4)),
+        ] as [number, number],
+        renderOrder: sprite.mesh.renderOrder,
+        headScreen: [Number(head.x.toFixed(4)), Number(head.y.toFixed(4))] as [
+          number,
+          number,
+        ],
+        hasShadow: sprite.shadow !== null,
+      };
+    }),
+
     /* Null until Phase 1 introduces real battle state. */
     battle: null,
   };
