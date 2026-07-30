@@ -68,27 +68,33 @@ test.describe('HUD DOM channel', () => {
     await expect(bar).toBeVisible();
 
     await expect(page.getByTestId('boss-name')).toHaveText('APOLLYON LV95');
-    await expect(page.getByTestId('boss-hp-text')).toHaveText('588,321/1,200,000');
+    // Phase 3: the bar reports the real boss from the roster, not the
+    // placeholder 588,321/1,200,000 it carried while nothing was wired up.
+    await expect(page.getByTestId('boss-hp-text')).toHaveText('4,200/4,200');
 
     // The accessible progressbar doubles as the machine-readable value --
     // this is exactly the precision a screenshot cannot give.
     const track = bar.getByRole('progressbar');
-    await expect(track).toHaveAttribute('aria-valuenow', '588321');
-    await expect(track).toHaveAttribute('aria-valuemax', '1200000');
+    await expect(track).toHaveAttribute('aria-valuenow', '4200');
+    await expect(track).toHaveAttribute('aria-valuemax', '4200');
   });
 
-  test('renders every command with the cursor on SKILL', async ({ page }) => {
+  /* Phase 3 dropped SPELL and ITEM. takeAction accepts attack, skill and
+     defend and nothing else, so a five-item menu was decoration that lied
+     about what the game could do. They return when there is an
+     implementation behind them. */
+  test('renders every implemented command with the cursor on ATTACK', async ({ page }) => {
     await page.goto('/');
 
     const menu = page.getByTestId('command-menu');
-    await expect(menu.getByRole('button')).toHaveCount(5);
+    await expect(menu.getByRole('button')).toHaveCount(3);
 
-    for (const label of ['Attack', 'Skill', 'Spell', 'Item', 'Defend']) {
+    for (const label of ['Attack', 'Skill', 'Defend']) {
       await expect(menu.getByRole('button', { name: label })).toBeVisible();
     }
 
-    await expect(page.getByTestId('command-skill')).toHaveAttribute('aria-current', 'true');
-    await expect(page.getByTestId('command-attack')).toHaveAttribute('aria-current', 'false');
+    await expect(page.getByTestId('command-attack')).toHaveAttribute('aria-current', 'true');
+    await expect(page.getByTestId('command-skill')).toHaveAttribute('aria-current', 'false');
   });
 
   test('command menu is keyboard reachable', async ({ page }) => {

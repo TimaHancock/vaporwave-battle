@@ -9,7 +9,15 @@ characters, DOM interface. One arena, one boss, one locked camera.
   inside three.js.** The DOM is the primary verification channel.
 - Battle logic in `src/battle/` must not import three.js or touch the DOM.
   It is pure functions over state, tested by Vitest in milliseconds.
-- The renderer and UI read `BattleState` and never write to it.
+  `sequencer.ts` is the one thing there that is not pure -- it exists to
+  spread a resolved turn out over time -- but it is still DOM-free, and its
+  pause is injected so tests run at zero delay.
+- The renderer and UI read `BattleState` and never write to it. The only
+  writer is the sequencer, and it writes only by calling `takeAction` and
+  `advance`.
+- Menu cursor state lives in `src/ui/menu.ts`, never in `BattleState`. It is
+  pure, so the whole menu is Vitest-testable; Playwright only checks that
+  the rendering and the key handler agree with it.
 
 ## Non-negotiable rules
 
@@ -57,6 +65,21 @@ Three channels, each with one job:
 alongside each PNG. If a PNG is black but draw calls are non-zero, the
 problem is lighting or camera, not loading.
 
+### URL parameters
+
+| Param | Effect |
+|---|---|
+| `?seed=` | Battle and scene randomness. Default 1337. |
+| `?time=` | Render one frame at this simulated time, then halt. |
+| `?stepMs=` | Sequencer pause between beats. Default 350. Enemy beats are `ENEMY_BEAT_MULTIPLIER`× this. |
+| `?bossHp=` | Override boss max HP **and** HP. For the victory e2e test. |
+
+`?bossHp=` shortens the boss rather than the pauses, so the e2e victory run
+still exercises real turn timing. The two lock tests go the other way and
+*lengthen* `stepMs`: browser round-trip latency under a parallel run can
+otherwise outlast a default-length turn, and the third keypress would land
+on a legitimately unlocked battle.
+
 ## Known traps
 
 - **Sprite transparency sorting.** three.js sorts transparent objects by
@@ -88,24 +111,56 @@ problem is lighting or camera, not loading.
   mobile layout question.
 - **Coplanar geometry z-fights.** The contact shadow sits at `y = 0.012`,
   not `0`, for this reason.
+- **The input lock must be set synchronously.** `Sequencer.submit` sets it
+  before any `await`. Move that behind a yield and three keypresses in one
+  task all pass the check, queueing three attacks. A rejected submit is
+  dropped, never deferred -- a replayed keypress fires against a state the
+  player never saw.
+- **`takeAction` throws on an illegal action**, so `src/ui/menu.ts` is
+  responsible for never producing one. `menuOptions` disables anything
+  illegal and `moveCursor` skips disabled entries, so the cursor cannot get
+  somewhere `confirm` would have to refuse. A closure test walks every
+  reachable path and asserts `takeAction` accepts the result.
+- **Debug state is published off the render loop too.** In `?time=` step
+  mode `drawFrame` runs once, so a snapshot built only there would freeze
+  `isLocked` at its boot value while the UI carried on.
+- **Enemy beats are slower than player beats**, by
+  `ENEMY_BEAT_MULTIPLIER` (3×), and an enemy turn opens with a line naming
+  who is acting. A player beat confirms something they chose and were
+  watching for; an enemy beat is the first they hear of it, arriving at the
+  tail of their own turn's narration. At an equal pause and with no
+  announcement, the boss's attack reads as a flicker and the player sees
+  their HP has dropped without seeing it drop. It is a multiplier, not a
+  fixed duration, so `?stepMs=0` still means instant everywhere.
 - Azure free tier caps the site at 250 MB. Compress textures (KTX2) and
   meshes (Draco). Check bundle size when adding assets.
 
 ## Current phase
 
-**Phase 1 complete: battle logic with no UI.** `src/battle/` holds the whole
-rules engine -- `turnOrder.ts`, `status.ts`, `actions.ts`, `battle.ts` -- and
-a full battle runs to victory in a Vitest test with zero pixels rendered.
+**Phase 3 complete: the battle is playable through the DOM.** A full fight
+runs end to end on the keyboard -- arrows move the cursor, Enter confirms,
+Escape backs out -- and reaches victory.
 
-The scene shows the finished composition: `kira` in real art, three
-placeholder party members, and a placeholder boss on the right.
+The chain is `keydown` → `ui/menu.ts` (pure) → `Action` →
+`battle/sequencer.ts` → `takeAction`/`advance` → `toHudModel` → `renderHud`,
+with `publishDebugState` fed from the same view so the DOM and
+`__debugState.battle` can never describe different moments.
 
-Nothing connects the two yet. `main.ts` still publishes `battle: null` and
-the HUD reads a static `HudModel`.
+The interface is **deliberately unstyled**. Turn order, party HP/MP and the
+round/chain/phase strip render bare, and no CSS was added for them. What was
+being answered was "does the loop work", not "does it look right".
 
-Next: wire `BattleState` into the renderer and the HUD. A sprite's `name` is
-its `ActorId`, so a `damage` event's `targetId` resolves to a sprite and
-`headScreenPosition()` gives the anchor for a DOM damage number.
+Not done, and the obvious next steps:
 
-Use plan mode before: the battle sequencer, the menu state machine, and the
-damage-number/animation layer.
+- **Styling.** The Phase 4 layout: party cards, a real turn-order bar, the
+  display typeface (still an open decision, to be made against real art).
+- **The damage-number layer.** The seam is ready: a sprite's `name` is its
+  `ActorId`, so a `damage` event's `targetId` resolves to a sprite and
+  `headScreenPosition()` gives the anchor.
+- **Per-enemy-turn granularity.** `advance` resolves every enemy turn in one
+  call, so a boss turn narrates beat by beat but its HP change lands in a
+  single commit. Splitting it needs a new entry point in `battle.ts`.
+- **Sprite reactions.** Nothing on the canvas moves when an actor is hit.
+
+Use plan mode before: the damage-number/animation layer and the Phase 4
+styling pass.

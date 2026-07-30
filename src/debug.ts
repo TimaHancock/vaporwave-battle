@@ -75,12 +75,45 @@ export interface DebugState {
     hasShadow: boolean;
   }>;
 
-  /** Populated from Phase 1 onward. Empty in Phase 0. */
+  /**
+   * The live battle.
+   *
+   * Null only before the bootstrap has built one. Everything here is battle
+   * or sequencer state -- deliberately NOT a mirror of the interface. The
+   * HUD is read from the DOM with selectors, which is more accurate than a
+   * copy could be, and a copy that drifted would be worse than nothing.
+   *
+   * `actors` is the exception that proves the rule: it is not a UI mirror,
+   * it is the state the UI claims to be showing. Having both means a
+   * disagreement between them is visible, which is the bug this whole file
+   * exists to catch.
+   */
   battle: {
     phase: string;
     round: number;
     chain: number;
     activeActor: string | null;
+    /** True while the sequencer is playing a turn. All input is ignored. */
+    isLocked: boolean;
+    /** Player actions ACCEPTED. Input rejected by the lock does not count. */
+    actionsTaken: number;
+    /** Labels of sequencer steps not yet run. Empty when idle. A sequence
+        that stalls reports where it stalled, not merely that it did. */
+    pending: string[];
+    /** Upcoming turn order, current actor first. */
+    upcoming: string[];
+    actors: Array<{
+      id: string;
+      name: string;
+      side: 'party' | 'enemy';
+      hp: number;
+      maxHp: number;
+      mp: number;
+      maxMp: number;
+      statuses: Array<{ kind: string; magnitude: number; turnsRemaining: number }>;
+    }>;
+    /** Every battle event so far, oldest first. */
+    log: Array<Record<string, unknown>>;
   } | null;
 }
 

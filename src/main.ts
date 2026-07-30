@@ -35,7 +35,12 @@ import {
   layoutParty,
   DEFAULT_BOSS_PLACEMENT,
 } from './scene/spriteLayout';
-import { renderHud, type HudModel } from './ui/hud';
+import { renderHud, toHudModel } from './ui/hud';
+import { back, confirm, moveCursor, INITIAL_MENU, type MenuState } from './ui/menu';
+import { createBattle } from './battle/battle';
+import { createRoster } from './battle/roster';
+import { createSequencer, type SequencerView } from './battle/sequencer';
+import { previewUpcoming } from './battle/turnOrder';
 import { createRng, seedFromLocation } from './rng';
 import { publishDebugState, type DebugState } from './debug';
 
@@ -59,6 +64,32 @@ const stepToRaw = params.get('time');
 const stepTo = stepToRaw === null ? null : Number.parseFloat(stepToRaw);
 const isStepMode = stepTo !== null && Number.isFinite(stepTo);
 
+/**
+ * Pause between sequencer beats, in milliseconds.
+ *
+ * Long enough to read a line of narration, short enough not to feel like a
+ * cutscene. Overridable so a test can slow it down; the e2e suite runs at
+ * the default so the input lock it asserts on is the real one.
+ */
+const DEFAULT_STEP_MS = 350;
+const stepMs = nonNegativeParam(params.get('stepMs')) ?? DEFAULT_STEP_MS;
+
+/**
+ * Boss health override, for the e2e suite.
+ *
+ * A full-strength boss takes roughly 25 player actions to fell, which at a
+ * readable pause length is a half-minute Playwright test. Shortening the
+ * boss rather than the pauses keeps the timing under test real.
+ */
+const bossMaxHp = nonNegativeParam(params.get('bossHp'));
+
+/** Parses a non-negative integer parameter, ignoring anything else. */
+function nonNegativeParam(raw: string | null): number | undefined {
+  if (raw === null) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 /* ---------------------------------------------------------------- */
 /* Static configuration                                              */
 /* ---------------------------------------------------------------- */
@@ -77,17 +108,6 @@ const BOSS_NAME = 'apollyon';
 
 /** Served from the web root -- public/ is copied there by Vite. */
 const KIRA_TEXTURE_URL = './characters/kira.png';
-
-/* HUD placeholder data -- real battle state arrives in Phase 1. */
-const hudModel: HudModel = {
-  bossName: 'APOLLYON',
-  bossLevel: 95,
-  bossHp: 588_321,
-  bossMaxHp: 1_200_000,
-  commands: ['Attack', 'Skill', 'Spell', 'Item', 'Defend'],
-  selectedCommandIndex: 1,
-  narration: 'Awaiting orders.',
-};
 
 /* ---------------------------------------------------------------- */
 /* Bootstrap                                                         */
@@ -135,9 +155,77 @@ async function main(
   const battle = createBattleScene(rng);
   const post = createPostProcessing(renderer, battle.scene, battle.camera);
 
-  /* --- HUD -------------------------------------------------------- */
+  /* --- Battle ----------------------------------------------------- */
 
-  renderHud(hudRoot, hudModel);
+  /* A SEPARATE rng stream from the scene's, deliberately. Sharing one would
+     make every crit roll depend on how many random draws scene construction
+     happened to make, so adding a decorative flicker would silently reroll
+     the fight -- and "seed 8871 turn 4 crashes" would stop being true. */
+  const battleRng = createRng(seed);
+
+  const initialState = createBattle(
+    seed,
+    createRoster(bossMaxHp === undefined ? {} : { bossMaxHp }),
+  );
+
+  let menu: MenuState = INITIAL_MENU;
+
+  const sequencer = createSequencer({
+    state: initialState,
+    rng: battleRng,
+    stepMs,
+    onChange: refresh,
+  });
+
+  /* One place the interface is rebuilt from state, called by the sequencer
+     on every beat and by the keyboard handler on every keypress. Both the
+     DOM and the debug channel are pure functions of the same view, so they
+     cannot disagree about what moment they are describing. */
+  function refresh(view: SequencerView = sequencer.view): void {
+    renderHud(hudRoot, toHudModel(view.state, menu, view));
+    publish();
+  }
+
+  /* --- Input ------------------------------------------------------ */
+
+  /* Listening on window, not on the buttons: this is a menu-driven game and
+     the cursor is the interaction, so the keys must work regardless of what
+     happens to hold focus. preventDefault stops arrows scrolling the page
+     and stops Enter reaching a focused button, which would otherwise fire
+     the same command a second time. */
+  window.addEventListener('keydown', (event) => {
+    const view = sequencer.view;
+
+    /* The sequencer is the authority on whether input is accepted -- submit
+       re-checks the lock itself. This is only an early return so the cursor
+       cannot be walked around a menu that is mid-turn. */
+    if (view.isLocked || view.state.phase !== 'in_progress') return;
+
+    switch (event.key) {
+      case 'ArrowUp':
+      case 'ArrowLeft':
+        menu = moveCursor(view.state, menu, -1);
+        break;
+      case 'ArrowDown':
+      case 'ArrowRight':
+        menu = moveCursor(view.state, menu, 1);
+        break;
+      case 'Enter': {
+        const result = confirm(view.state, menu);
+        menu = result.menu;
+        if (result.action !== null) sequencer.submit(result.action);
+        break;
+      }
+      case 'Escape':
+        menu = back(menu);
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    refresh();
+  });
 
   /* --- Resize ----------------------------------------------------- */
 
@@ -155,11 +243,27 @@ async function main(
 
   /* --- Debug state ------------------------------------------------ */
 
-  function snapshot(time: number, ready: boolean): DebugState {
+  /* Time and readiness are hoisted out of drawFrame because publishing is no
+     longer the render loop's job alone. In `?time=` step mode drawFrame runs
+     exactly ONCE, so a snapshot built only there would freeze isLocked and
+     the battle state at their boot values for the whole harness session --
+     the UI would be live and the debug channel would be reporting a moment
+     from before the player pressed anything. */
+  let currentTime = 0;
+  let isReady = false;
+
+  function publish(): void {
+    publishDebugState(snapshot());
+  }
+
+  function snapshot(): DebugState {
+    const view = sequencer.view;
+    const state = view.state;
+
     return {
-      time: Number(time.toFixed(4)),
+      time: Number(currentTime.toFixed(4)),
       seed,
-      ready,
+      ready: isReady,
       camera: {
         position: battle.camera.position.toArray() as [number, number, number],
         target: CAMERA.target.toArray() as [number, number, number],
@@ -201,8 +305,28 @@ async function main(
         };
       }),
 
-      /* Null until Phase 1 introduces real battle state. */
-      battle: null,
+      battle: {
+        phase: state.phase,
+        round: state.round,
+        chain: state.chain,
+        activeActor: state.turnQueue[state.turnIndex] ?? null,
+        isLocked: view.isLocked,
+        actionsTaken: view.actionsTaken,
+        pending: [...view.pending],
+        upcoming:
+          state.phase === 'in_progress' ? previewUpcoming(state, 6) : [],
+        actors: state.actors.map((actor) => ({
+          id: actor.id,
+          name: actor.name,
+          side: actor.side,
+          hp: actor.hp,
+          maxHp: actor.stats.maxHp,
+          mp: actor.mp,
+          maxMp: actor.stats.maxMp,
+          statuses: actor.statuses.map((status) => ({ ...status })),
+        })),
+        log: view.log.map((event) => ({ ...event })),
+      },
     };
   }
 
@@ -214,14 +338,17 @@ async function main(
     battle.update(elapsed);
     renderer.info.reset();
     post.composer.render();
-    publishDebugState(snapshot(elapsed, true));
+    currentTime = elapsed;
+    isReady = true;
+    publish();
   }
 
-  /* Publish a not-ready state BEFORE the texture load, so the harness can
-     poll for `__debugState.ready === true` rather than guessing with a
-     timeout. The cast is empty at this point, which is exactly what a
-     not-ready state should report. */
-  publishDebugState(snapshot(0, false));
+  /* Render the HUD and publish a not-ready state BEFORE the texture load, so
+     the harness can poll for `__debugState.ready === true` rather than
+     guessing with a timeout. The cast is empty at this point, which is
+     exactly what a not-ready state should report -- but the battle is not,
+     so the interface is already correct and already playable. */
+  refresh();
 
   /* --- Character cast --------------------------------------------- */
 
