@@ -58,14 +58,27 @@ export function spriteDimensions(
 /**
  * PlaneGeometry is built centred on its origin, so a plane placed at y=0
  * is half-buried in the floor. This returns the centre Y that puts the
- * sprite's bottom edge exactly on the ground plane.
+ * sprite's CONTENT -- its lowest opaque pixel -- exactly on the ground.
  *
  * The platform top surface in this scene sits at y=0, so groundY defaults
  * to 0. If the platform height ever changes, change it here rather than
  * scattering offsets through the scene code.
+ *
+ * `feetInset` is the fraction of the texture's height that is empty below
+ * the feet. Character art is authored with a generous transparent margin
+ * (see public/characters/README.md), so grounding the plane's bottom EDGE
+ * leaves the visible feet hovering above the floor by exactly that margin.
+ * At a 2.2-unit height a 3% margin lifts the character 0.066 units -- about
+ * a third of the contact shadow's screen depth, which is enough to make the
+ * whole cast read as floating above their own shadows. Pushing the empty
+ * strip below the floor costs nothing: it is transparent either way.
  */
-export function groundedCentreY(spriteWorldHeight: number, groundY = 0): number {
-  return groundY + spriteWorldHeight / 2;
+export function groundedCentreY(
+  spriteWorldHeight: number,
+  groundY = 0,
+  feetInset = 0,
+): number {
+  return groundY + spriteWorldHeight / 2 - feetInset * spriteWorldHeight;
 }
 
 /* ------------------------------------------------------------------ */

@@ -42,12 +42,25 @@ Cleaner cutout, better result.
 
 ## Swapping placeholders for real art
 
-In `src/main.ts`, replace `createPlaceholderCharacterTexture()` with:
+`src/main.ts` bootstraps inside `async function main()` precisely so art can
+be awaited. `kira` is already wired up; adding the next character means
+loading its texture beside hers and handing it to the same `spawnCast()` call:
 
 ```ts
-await loadCharacterTexture('./characters/kira.png')
+const kira = await loadCharacterTexture('./characters/kira.png');
+const neo = await loadCharacterTexture('./characters/neo.png');
 ```
 
-Nothing else changes. `loadCharacterTexture` rejects on failure rather than
-substituting a blank, because a silently missing sprite is indistinguishable
-from a positioning bug in a screenshot.
+Two rules the structure exists to protect:
+
+- **Await before spawning.** `createCharacterSprite()` derives the plane's
+  dimensions from the texture's pixel aspect and throws if the image has not
+  decoded. It does not guess.
+- **One `spawnCast()` call for the whole party.** `assignRenderOrders()` ranks
+  the cast in a single pass; two calls produce two independent draw sequences
+  that collide.
+
+`loadCharacterTexture` rejects on failure rather than substituting a blank,
+because a silently missing sprite is indistinguishable from a positioning bug
+in a screenshot. A rejection leaves `__debugState.ready` false, so the shot
+harness fails loudly instead of capturing a wrong scene.

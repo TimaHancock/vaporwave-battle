@@ -78,6 +78,20 @@ export interface CharacterSpriteOptions {
 
   /** Opacity of the contact shadow, 0..1. Set 0 to disable. */
   shadowOpacity?: number;
+
+  /**
+   * Linear luminance above which the sprite's highlights start compressing.
+   * Below this, colours pass through exactly as authored.
+   */
+  highlightKnee?: number;
+
+  /**
+   * Linear luminance the sprite's highlights asymptotically approach.
+   *
+   * See HIGHLIGHT_CEILING for where the default comes from and why capping
+   * here is what stops bloom bleeding past the silhouette.
+   */
+  highlightCeiling?: number;
 }
 
 export interface CharacterSprite {
@@ -88,6 +102,15 @@ export interface CharacterSprite {
   readonly name: string;
   /** Sprite dimensions in world units, derived from the texture aspect. */
   readonly size: { width: number; height: number };
+  /**
+   * Fraction of the texture's height that is empty below the feet, measured
+   * from the art. Non-zero is normal -- the contract asks for a transparent
+   * margin. Exposed so the harness can prove grounding numerically rather
+   * than by squinting at whether a character floats.
+   */
+  readonly feetInset: number;
+  /** World height of the visible character, excluding transparent margins. */
+  readonly contentHeight: number;
   /**
    * Project the sprite's head position into normalised screen coordinates.
    * Use this to place DOM damage numbers over the character: crisp text,
@@ -135,6 +158,160 @@ function texturePixelSize(
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Highlight rolloff                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Linear luminance the sprite's brightest pixels approach but never pass.
+ *
+ * This is the sun's gradient at its halfway point, which is the reference
+ * the art is judged against: a character should never out-shine the middle
+ * of the sunset behind them. Interpolating the sun stops `#ff9a3c` (0.45)
+ * and `#ff2d95` (1.0) at t=0.5 gives roughly (255, 144, 68), whose linear
+ * luminance is 0.2126*1.0 + 0.7152*0.279 + 0.0722*0.058.
+ *
+ * It also does the bloom's job for it. UnrealBloomPass thresholds at 0.68
+ * (see post.ts); holding every sprite pixel below 0.42 means the pass never
+ * picks a character up, so their authored rim lights stay hard-edged
+ * instead of smearing glow outside the silhouette. The neon that SHOULD
+ * bloom -- sun, dice, grid centre line -- is untouched.
+ */
+export const HIGHLIGHT_CEILING = 0.416;
+
+/**
+ * Linear luminance where compression begins. Everything below passes
+ * through untouched.
+ *
+ * Deliberately well above the art's midtones. A uniform brightness scale
+ * would have been one line, but roughly a quarter of a character sits close
+ * to the backdrop value already -- dimming the whole figure to tame its
+ * highlights is what makes a shadow side dissolve into the background.
+ * Compressing only the top of the range leaves that separation intact.
+ */
+export const HIGHLIGHT_KNEE = 0.25;
+
+/**
+ * Injects a soft highlight knee into a stock MeshBasicMaterial.
+ *
+ * The rolloff is exponential rather than a hard clamp: `capped` approaches
+ * the ceiling asymptotically, so a broad specular does not flatten into a
+ * plateau of one flat value. Chroma is preserved by scaling the whole RGB
+ * triple by the luminance ratio rather than clamping channels, which would
+ * shift a hot magenta toward white on its way down.
+ *
+ * This runs in LINEAR space -- the texture is sRGB-decoded at sample time,
+ * and the composer's OutputPass applies tone mapping afterwards -- so both
+ * constants are linear luminance, not the 0..255 values a screenshot shows.
+ */
+function applyHighlightRolloff(
+  material: THREE.MeshBasicMaterial,
+  knee: number,
+  ceiling: number,
+): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms['uHighlightKnee'] = { value: knee };
+    shader.uniforms['uHighlightCeiling'] = { value: ceiling };
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        'void main() {',
+        'uniform float uHighlightKnee;\n' +
+          'uniform float uHighlightCeiling;\n' +
+          'void main() {',
+      )
+      /* map_fragment is where the sampled texture lands in diffuseColor. */
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        {
+          float hlLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+          if (hlLum > uHighlightKnee) {
+            float over = (hlLum - uHighlightKnee) / max(1e-4, 1.0 - uHighlightKnee);
+            float capped = uHighlightKnee +
+              (uHighlightCeiling - uHighlightKnee) * (1.0 - exp(-over * 2.0));
+            diffuseColor.rgb *= capped / max(hlLum, 1e-4);
+          }
+        }`,
+      );
+  };
+
+  /* Without a distinct cache key three.js hands back the cached program for
+     a stock MeshBasicMaterial and the injected code silently never runs --
+     a failure that looks exactly like the constants being wrong. */
+  material.customProgramCacheKey = () =>
+    `characterHighlightRolloff:${knee}:${ceiling}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Opaque bounds                                                       */
+/* ------------------------------------------------------------------ */
+
+/** Pixel bounds of a texture's opaque content. Inclusive on all edges. */
+interface OpaqueBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/**
+ * Finds the bounding box of a texture's opaque pixels.
+ *
+ * Character art carries a generous transparent margin by contract, which
+ * means the image's edges are NOT the character's edges. Grounding, and
+ * head placement for DOM damage numbers, both need where the art actually
+ * is -- measuring it beats trusting a hand-entered number per character,
+ * because a regenerated PNG changes its margins silently.
+ *
+ * Returns null when nothing clears the alpha cutoff, which callers should
+ * treat as "no inset" rather than an error: a fully transparent texture is
+ * already invisible and a thrown exception here would be misleading.
+ */
+function opaqueBounds(
+  texture: THREE.Texture,
+  width: number,
+  height: number,
+  alphaTest: number,
+): OpaqueBounds | null {
+  const source: unknown = texture.image;
+  if (!(source instanceof HTMLImageElement ||
+        source instanceof HTMLCanvasElement ||
+        source instanceof ImageBitmap)) {
+    return null;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (ctx === null) return null;
+
+  ctx.drawImage(source, 0, 0, width, height);
+  const { data } = ctx.getImageData(0, 0, width, height);
+
+  /* Match the cutoff the material uses, so bounds agree with what is
+     actually drawn rather than with any faint matte fringe below it. */
+  const cutoff = Math.max(1, Math.round(alphaTest * 255));
+
+  let minX = width;
+  let maxX = -1;
+  let minY = height;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3]! < cutoff) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  return maxY < 0 ? null : { minX, maxX, minY, maxY };
+}
+
 export function createCharacterSprite(
   options: CharacterSpriteOptions,
 ): CharacterSprite {
@@ -147,6 +324,8 @@ export function createCharacterSprite(
     alphaTest = 0.15,
     toneMapped = true,
     shadowOpacity = 0.45,
+    highlightKnee = HIGHLIGHT_KNEE,
+    highlightCeiling = HIGHLIGHT_CEILING,
   } = options;
 
   const group = new THREE.Group();
@@ -174,6 +353,17 @@ export function createCharacterSprite(
 
   const { width: pixelWidth, height: pixelHeight } = texturePixelSize(texture, name);
   const size = spriteDimensions(pixelWidth, pixelHeight, worldHeight);
+
+  /* --- Where the character actually is inside its image -------------- */
+
+  /* The image's edges are not the character's edges. Both grounding and
+     head placement need the content, not the canvas. */
+  const bounds = opaqueBounds(texture, pixelWidth, pixelHeight, alphaTest);
+
+  /** Fraction of the image height that is empty below the feet. */
+  const feetInset = bounds === null ? 0 : (pixelHeight - 1 - bounds.maxY) / pixelHeight;
+  /** Fraction of the image height that is empty above the head. */
+  const headInset = bounds === null ? 0 : bounds.minY / pixelHeight;
 
   /* --- Geometry ----------------------------------------------------- */
 
@@ -212,11 +402,14 @@ export function createCharacterSprite(
     fog: false,
   });
 
+  applyHighlightRolloff(material, highlightKnee, highlightCeiling);
+
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = `sprite-mesh:${name}`;
 
-  /* Centre the plane so its bottom edge lands exactly on the floor. */
-  mesh.position.y = groundedCentreY(size.height);
+  /* Centre the plane so the character's FEET land on the floor -- not the
+     plane's bottom edge, which sits below them by the art's margin. */
+  mesh.position.y = groundedCentreY(size.height, 0, feetInset);
 
   /* Explicit draw sequence. See assignRenderOrders() for why the default
      distance sort is not good enough here. */
@@ -271,16 +464,24 @@ export function createCharacterSprite(
 
   const headWorld = new THREE.Vector3();
 
+  /* The plane's top edge is empty margin; the character's crown is lower.
+     For a 2.2-unit sprite with a 4% top margin that is ~17 screen pixels,
+     which is the difference between a damage number over the head and one
+     floating in the air above it. */
+  const contentHeight = size.height * (1 - feetInset - headInset);
+
   return {
     group,
     mesh,
     shadow,
     name,
     size,
+    feetInset,
+    contentHeight,
 
     headScreenPosition(camera: THREE.Camera) {
-      /* Top of the sprite, in world space, then projected to clip space. */
-      headWorld.set(group.position.x, size.height, group.position.z);
+      /* Top of the CHARACTER, in world space, then projected to clip space. */
+      headWorld.set(group.position.x, contentHeight, group.position.z);
       headWorld.project(camera);
       /* Clip space is -1..1 with +Y up; convert to 0..1 with +Y down so it
          maps directly onto CSS percentages. */

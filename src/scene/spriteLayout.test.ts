@@ -75,6 +75,20 @@ describe('groundedCentreY', () => {
   it('respects a raised ground plane', () => {
     expect(groundedCentreY(2.4, 0.5)).toBe(1.7);
   });
+
+  it('leaves the plane alone when the art has no margin below the feet', () => {
+    expect(groundedCentreY(2.4, 0, 0)).toBe(1.2);
+  });
+
+  it('sinks the empty margin below the floor so the feet land on it', () => {
+    /* 5% of 2.4 is 0.12, so the plane drops by that much and the lowest
+       opaque pixel -- not the plane's bottom edge -- ends up at y=0. */
+    expect(groundedCentreY(2.4, 0, 0.05)).toBeCloseTo(1.08, 10);
+  });
+
+  it('combines a feet inset with a raised ground plane', () => {
+    expect(groundedCentreY(2.4, 0.5, 0.05)).toBeCloseTo(1.58, 10);
+  });
 });
 
 describe('layoutParty', () => {

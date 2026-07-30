@@ -164,6 +164,30 @@ export function createBattleScene(rng: Rng): BattleScene {
   camera.position.copy(CAMERA.position);
   camera.lookAt(CAMERA.target);
 
+  /* --- Ocean surface ----------------------------------------------- */
+  /*
+   * An invisible occluder, not a visible surface.
+   *
+   * The grid below is bare LineSegments -- lines have no interior, so
+   * without this the ocean does not block anything and the sun's lower half
+   * hangs BELOW the horizon it should be setting behind. This plane is the
+   * void colour against a void background and void fog, so it never reads
+   * as a surface; its entire job is writing depth so the horizon cuts the
+   * sun cleanly.
+   *
+   * It sits below the grid rather than level with it. Coplanar would just
+   * trade one z-fight for another, and depth precision is worst out at the
+   * grid's far edge where the two would be hardest to separate.
+   */
+  const oceanGeometry = registry.track(new THREE.PlaneGeometry(400, 400));
+  const oceanMaterial = registry.track(
+    new THREE.MeshBasicMaterial({ color: PALETTE.void }),
+  );
+  const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
+  ocean.rotation.x = -Math.PI / 2;
+  ocean.position.set(0, -0.9, -20);
+  scene.add(ocean);
+
   /* --- Grid ocean ------------------------------------------------- */
   /* THREE.GridHelper is a LineSegments, so it renders as pure emissive
      colour with no lighting -- exactly the look wanted, and free. */
@@ -171,7 +195,22 @@ export function createBattleScene(rng: Rng): BattleScene {
      colour here and it over-weighted the palette -- the site uses cyan
      only for thin circuit traces, never as a structural colour. */
   const grid = new THREE.GridHelper(160, 80, PALETTE.horizon, PALETTE.rose);
-  grid.position.set(0, 0, -20);
+  /*
+   * y = -0.6 is the platform's underside, so the dais rests ON the ocean
+   * and reads as raised above it.
+   *
+   * At y = 0 the grid was exactly coplanar with the platform's top face,
+   * and three.js defaults to LessEqualDepth -- equal depth PASSES -- so
+   * every grid line drew straight across the platform surface and the
+   * arena looked painted onto the ocean rather than standing on it.
+   * Separating them in depth is what lets the opaque platform occlude the
+   * grid; it is not a cosmetic offset.
+   *
+   * The horizon does not move: a horizontal plane's vanishing line depends
+   * on the camera's height, not the plane's, so only the near lines shift
+   * down and the sun still sets at the same place.
+   */
+  grid.position.set(0, -0.6, -20);
   const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
   for (const material of gridMaterials) {
     material.transparent = true;
@@ -184,13 +223,32 @@ export function createBattleScene(rng: Rng): BattleScene {
   /* --- Sun -------------------------------------------------------- */
   /* A vertical gradient painted into a canvas texture, on a circle. A
      shader would be marginally cheaper but far less legible to edit. */
-  const sunGeometry = registry.track(new THREE.CircleGeometry(6, 64));
+  /*
+   * DISTANCE IS LOAD-BEARING, not just scale.
+   *
+   * The ocean can only hide the sun where the ocean is NEARER to the camera
+   * than the sun is. Every screen row below the horizon corresponds to a
+   * further point on the water, running out to infinity at the horizon
+   * itself -- so a close sun pokes out below it no matter how big the ocean
+   * plane is. At the original 42 units the water only overtook it near the
+   * very bottom of the disc, which is why it hung below the horizon looking
+   * like it was floating in front of the sea rather than setting into it.
+   *
+   * At 100 units the water overtakes the disc at screen y ~224, above where
+   * the grid fades into the fog (~246), so the sun sets cleanly behind the
+   * horizon. Radius and height are scaled with the distance to hold exactly
+   * the same apparent size and position in frame -- this is a depth change,
+   * not a composition change. Keep the three values in step if you move it.
+   *
+   * Fog would swallow it at this range (fog ends at 70), hence fog: false.
+   */
+  const sunGeometry = registry.track(new THREE.CircleGeometry(12.57, 64));
   const sunTexture = registry.track(createGradientTexture());
   const sunMaterial = registry.track(
     new THREE.MeshBasicMaterial({ map: sunTexture, transparent: true, fog: false }),
   );
   const sun = new THREE.Mesh(sunGeometry, sunMaterial);
-  sun.position.set(0, 4.2, -42);
+  sun.position.set(0, 5.31, -100);
   scene.add(sun);
 
   /* --- Combat platform -------------------------------------------- */

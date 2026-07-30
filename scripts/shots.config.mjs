@@ -37,9 +37,19 @@ export const SHOTS = [
   {
     name: 'cast_grounded',
     description:
-      'Five placeholder billboards with contact shadows. Check the silhouette ' +
-      'edges for halo, and that each figure reads as standing ON the platform ' +
-      'rather than floating above it.',
+      'Five billboards with contact shadows -- one real character, four ' +
+      'placeholders. Check the silhouette edges for halo, and that each ' +
+      'figure reads as standing ON the platform rather than floating above it.',
+    seed: 1337,
+    time: 1.0,
+  },
+  {
+    name: 'first_art',
+    description:
+      'First real character in the scene, at the default alphaTest. Three ' +
+      'questions: is there a halo or fringe along the silhouette, does the ' +
+      'contact shadow read as touching the floor, and does the baked key ' +
+      'light agree with the scene key from the upper front-left?',
     seed: 1337,
     time: 1.0,
   },

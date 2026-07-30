@@ -58,6 +58,14 @@ export interface DebugState {
     /** Derived from the texture aspect -- a 1:1 ratio usually means the
         texture had not decoded when the sprite was built. */
     size: [number, number];
+    /** Fraction of the texture height that is empty below the feet. The
+        plane is lowered by this much so the art's feet, rather than the
+        image's bottom edge, meet the floor. A character that reads as
+        floating above its contact shadow is this value being ignored. */
+    feetInset: number;
+    /** World height of the visible character, excluding transparent
+        margins. Always <= size[1]. */
+    contentHeight: number;
     renderOrder: number;
     /** Normalised 0..1 screen position of the sprite's head, for placing
         DOM damage numbers. Outside 0..1 means off-screen. */
