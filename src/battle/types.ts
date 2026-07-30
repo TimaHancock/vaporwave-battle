@@ -68,24 +68,110 @@ export function isDefeated(actor: Actor): boolean {
 export interface BattleState {
   /** The seed this battle was created with. Logged for reproducibility. */
   seed: number;
-  /** Every actor, party and enemy, keyed by turn-order position. */
+  /**
+   * Every actor, party and enemy, in stable insertion order.
+   *
+   * Deliberately NOT the turn order. Speed order changes whenever HASTE
+   * lands or an actor falls, and an array that reshuffles under callers is
+   * how stale indices end up pointing at the wrong character. The order of
+   * play lives in `turnQueue`; this array only has to be findable.
+   */
   actors: Actor[];
-  /** Index into `actors` of whoever is currently acting. */
-  activeActorIndex: number;
+  /**
+   * Actor ids in the order they act this round, from `buildRound`.
+   * Rebuilt at the start of each round, so a mid-round speed change takes
+   * effect next round rather than reordering a round already under way.
+   */
+  turnQueue: ActorId[];
+  /** Position within `turnQueue` of whoever is currently acting. */
+  turnIndex: number;
   /** Completed rounds. Useful for status expiry and boss phase gating. */
   round: number;
-  /** Consecutive successful hits without a miss. Drives the CHAIN counter. */
+  /**
+   * Consecutive damaging hits landed by the party. Drives the CHAIN counter.
+   *
+   * Increments on every damaging hit a party member lands, and resets to
+   * zero the moment a party member takes damage. The enemy landing a hit is
+   * what breaks a chain -- not the party missing, since nothing in the
+   * damage formula can currently miss.
+   */
   chain: number;
   phase: 'in_progress' | 'victory' | 'defeat';
 }
 
+/** Find an actor by id. Returns undefined rather than throwing. */
+export function findActor(
+  state: BattleState,
+  id: ActorId,
+): Actor | undefined {
+  return state.actors.find((actor) => actor.id === id);
+}
+
 export function activeActor(state: BattleState): Actor {
-  const actor = state.actors[state.activeActorIndex];
+  const id = state.turnQueue[state.turnIndex];
+  if (id === undefined) {
+    throw new Error(
+      `turnIndex ${state.turnIndex} is out of range ` +
+        `(queue has ${state.turnQueue.length} entries)`,
+    );
+  }
+
+  const actor = findActor(state, id);
   if (actor === undefined) {
     throw new Error(
-      `activeActorIndex ${state.activeActorIndex} is out of range ` +
-        `(${state.actors.length} actors)`,
+      `turnQueue holds unknown actor id "${id}"; ` +
+        `known ids are ${state.actors.map((a) => a.id).join(', ')}`,
     );
   }
   return actor;
+}
+
+/* ------------------------------------------------------------------ */
+/* Actions                                                             */
+/* ------------------------------------------------------------------ */
+
+/** Identifier for an entry in the skill table (see actions.ts). */
+export type SkillId = string;
+
+/**
+ * What an actor does on its turn.
+ *
+ * A discriminated union rather than a class hierarchy: it is exhaustively
+ * checkable by the compiler, trivially serialisable into a replay log, and
+ * the UI can construct one without importing any battle logic.
+ */
+export type Action =
+  | { kind: 'attack'; targetId: ActorId }
+  | { kind: 'skill'; skillId: SkillId; targetId: ActorId }
+  | { kind: 'defend' };
+
+/* ------------------------------------------------------------------ */
+/* Events                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What actually happened when an action resolved.
+ *
+ * State says what is true now; events say what changed. The UI needs the
+ * second one -- a damage number, a status icon flying in, a death animation
+ * are all responses to a transition, and diffing two states to recover them
+ * is both harder and lossier than being told directly.
+ */
+export type BattleEvent =
+  | {
+      kind: 'damage';
+      sourceId: ActorId;
+      targetId: ActorId;
+      amount: number;
+      isCritical: boolean;
+    }
+  | { kind: 'heal'; sourceId: ActorId; targetId: ActorId; amount: number }
+  | { kind: 'statusApplied'; sourceId: ActorId; targetId: ActorId; status: Status }
+  | { kind: 'defeated'; actorId: ActorId }
+  | { kind: 'battleEnded'; outcome: 'victory' | 'defeat' };
+
+/** Every state transition returns the new state alongside what it caused. */
+export interface Resolution {
+  state: BattleState;
+  events: BattleEvent[];
 }

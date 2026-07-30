@@ -6,8 +6,10 @@ import {
   assignRenderOrders,
   contactShadowSize,
   formationExtent,
+  bossPosition,
   SPRITE_RENDER_ORDER_BASE,
   DEFAULT_PARTY_LAYOUT,
+  DEFAULT_BOSS_PLACEMENT,
   PLATFORM_RADIUS,
   PLATFORM_SAFE_RADIUS,
   CANONICAL_ASPECT,
@@ -44,6 +46,74 @@ function projectedScreenX(worldX: number, worldZ: number, aspect: number): numbe
   // Normalised device x, then remapped to 0..1 screen space.
   return (worldX / halfWidth + 1) / 2;
 }
+
+describe('bossPosition', () => {
+  it('grounds the boss at the placement coordinates', () => {
+    expect(bossPosition()).toEqual({ x: 2.6, y: 0, z: 0.2 });
+  });
+
+  it('keeps the default placement on the platform', () => {
+    const { x, z } = DEFAULT_BOSS_PLACEMENT;
+    expect(Math.hypot(x, z)).toBeLessThan(PLATFORM_SAFE_RADIUS);
+  });
+
+  /* The composition contract: party left, boss right. The party half is
+     asserted separately against a four-member formation. */
+  it('places the boss in the right half of a 16:9 frame', () => {
+    const { x, z } = DEFAULT_BOSS_PLACEMENT;
+    expect(projectedScreenX(x, z, CANONICAL_ASPECT)).toBeGreaterThan(0.6);
+  });
+
+  it('stands clear of the rightmost party member', () => {
+    const party = layoutParty(4);
+    const rightmostParty = Math.max(
+      ...party.map((p) => projectedScreenX(p.x, p.z, CANONICAL_ASPECT)),
+    );
+    const boss = projectedScreenX(
+      DEFAULT_BOSS_PLACEMENT.x,
+      DEFAULT_BOSS_PLACEMENT.z,
+      CANONICAL_ASPECT,
+    );
+    expect(boss).toBeGreaterThan(rightmostParty + 0.15);
+  });
+
+  /* The two sides face off across one rank rather than the boss looming
+     from a second row behind the party. */
+  it('stands on the same line as the party front rank', () => {
+    const partyDepths = layoutParty(4).map((p) => p.z);
+    expect(DEFAULT_BOSS_PLACEMENT.z).toBe(Math.max(...partyDepths));
+  });
+
+  it('is separated from the party by distance across, not depth', () => {
+    const rightmostParty = Math.max(...layoutParty(4).map((p) => p.x));
+    expect(DEFAULT_BOSS_PLACEMENT.x - rightmostParty).toBeGreaterThan(2);
+  });
+
+  it('rejects a placement past the platform lip', () => {
+    expect(() => bossPosition({ x: 5, z: -3, worldHeight: 3.6 })).toThrow(
+      /PLATFORM_SAFE_RADIUS/,
+    );
+  });
+
+  it('rejects a non-positive height', () => {
+    expect(() => bossPosition({ x: 0, z: 0, worldHeight: 0 })).toThrow(/0/);
+  });
+});
+
+describe('a four-member party leaves room for the boss', () => {
+  it('fits on the platform', () => {
+    expect(formationExtent(layoutParty(4))).toBeLessThan(PLATFORM_SAFE_RADIUS);
+  });
+
+  /* Dropping from five to four is what opens the right half of frame; the
+     formation shrinks rather than being re-centred. */
+  it('pulls the rightmost member further left than a party of five did', () => {
+    const rightmost = (count: number): number =>
+      Math.max(...layoutParty(count).map((p) => projectedScreenX(p.x, p.z, CANONICAL_ASPECT)));
+    expect(rightmost(4)).toBeLessThan(rightmost(5));
+    expect(rightmost(4)).toBeLessThan(0.6);
+  });
+});
 
 describe('spriteDimensions', () => {
   it('preserves the source image aspect ratio', () => {
@@ -183,6 +253,36 @@ describe('assignRenderOrders', () => {
     ];
     const orders = assignRenderOrders(tied);
     expect(new Set(orders).size).toBe(3);
+  });
+
+  /* A whole rank shares one z -- the party's outer members and the boss all
+     stand at z 0.2 -- so the tie-break decides their draw sequence. It must
+     not be "whatever order main.ts happened to build the cast in". */
+  it('breaks a z tie left to right, not by input order', () => {
+    const left = { x: -1, y: 0, z: 0 };
+    const middle = { x: 0, y: 0, z: 0 };
+    const right = { x: 1, y: 0, z: 0 };
+
+    expect(assignRenderOrders([left, middle, right])).toEqual([10, 11, 12]);
+    // Same three positions, shuffled: each keeps the order it had before.
+    expect(assignRenderOrders([right, left, middle])).toEqual([12, 10, 11]);
+  });
+
+  it('gives the on-screen cast a stable sequence regardless of cast order', () => {
+    const cast = [...layoutParty(4), bossPosition()];
+    const shuffled = [cast[4]!, cast[1]!, cast[3]!, cast[0]!, cast[2]!];
+
+    const byPosition = new Map(
+      assignRenderOrders(cast).map((order, i) => [`${cast[i]!.x},${cast[i]!.z}`, order]),
+    );
+    const shuffledByPosition = new Map(
+      assignRenderOrders(shuffled).map((order, i) => [
+        `${shuffled[i]!.x},${shuffled[i]!.z}`,
+        order,
+      ]),
+    );
+
+    expect(shuffledByPosition).toEqual(byPosition);
   });
 
   it('handles an empty scene', () => {

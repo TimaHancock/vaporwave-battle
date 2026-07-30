@@ -75,8 +75,12 @@ problem is lighting or camera, not loading.
   `renderOrder` than sprites.
 - **The stage has hard bounds.** Platform top radius is 6;
   `PLATFORM_SAFE_RADIUS` is 5.2. `layoutParty()` auto-fits spacing so no
-  party size can overflow -- do not bypass it by positioning sprites by
-  hand. A sprite past the lip stands on nothing and its shadow floats.
+  party size can overflow, and `bossPosition()` rejects a boss past the lip
+  -- do not bypass either by positioning sprites by hand. A sprite past the
+  lip stands on nothing and its shadow floats.
+- **Composition is party-left, boss-right.** Party of 4 via `layoutParty`,
+  boss via `DEFAULT_BOSS_PLACEMENT`. The e2e suite asserts both halves; a
+  scene with no boss used to pass the left-half check on its own.
 - **Composition is authored for 16:9.** The camera's fov is vertical, so
   horizontal coverage shrinks as the window narrows. Check any layout change
   against `CANONICAL_ASPECT`; the e2e suite pins its viewport to match.
@@ -89,16 +93,19 @@ problem is lighting or camera, not loading.
 
 ## Current phase
 
-**Phase 0 complete, plus the sprite billboard layer.** Placeholder cast of 5
-renders with contact shadows; real art drops into `public/characters/`.
+**Phase 1 complete: battle logic with no UI.** `src/battle/` holds the whole
+rules engine -- `turnOrder.ts`, `status.ts`, `actions.ts`, `battle.ts` -- and
+a full battle runs to victory in a Vitest test with zero pixels rendered.
 
-Next: Phase 1 — battle logic with no UI at all. Actors, turn order,
-`takeAction()`. Verify entirely with Vitest; a full battle should be
-simulable in a test with zero pixels rendered.
+The scene shows the finished composition: `kira` in real art, three
+placeholder party members, and a placeholder boss on the right.
 
-Before committing further to the visual direction: generate one real
-character, drop it in, and turn on bloom. That answers the highest
--uncertainty question in the project and costs an evening.
+Nothing connects the two yet. `main.ts` still publishes `battle: null` and
+the HUD reads a static `HudModel`.
 
-Use plan mode before: the battle sequencer, turn-order system, the menu
-state machine, and the status-effect system.
+Next: wire `BattleState` into the renderer and the HUD. A sprite's `name` is
+its `ActorId`, so a `damage` event's `targetId` resolves to a sprite and
+`headScreenPosition()` gives the anchor for a DOM damage number.
+
+Use plan mode before: the battle sequencer, the menu state machine, and the
+damage-number/animation layer.

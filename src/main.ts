@@ -26,10 +26,15 @@ import * as THREE from 'three';
 import { createBattleScene, CAMERA } from './scene/battleScene';
 import { createPostProcessing } from './scene/post';
 import {
+  createPlaceholderBossTexture,
   createPlaceholderCharacterTexture,
   loadCharacterTexture,
 } from './scene/sprite';
-import { layoutParty } from './scene/spriteLayout';
+import {
+  bossPosition,
+  layoutParty,
+  DEFAULT_BOSS_PLACEMENT,
+} from './scene/spriteLayout';
 import { renderHud, type HudModel } from './ui/hud';
 import { createRng, seedFromLocation } from './rng';
 import { publishDebugState, type DebugState } from './debug';
@@ -58,9 +63,17 @@ const isStepMode = stepTo !== null && Number.isFinite(stepTo);
 /* Static configuration                                              */
 /* ---------------------------------------------------------------- */
 
-/* Party count is 5 to match the silhouettes in the site hero. The first
-   member has real art; the rest stay procedural until their PNGs exist. */
-const PARTY_NAMES = ['kira', 'neo', 'vex', 'lyra', 'sage'] as const;
+/* Four, not five. The composition is party-left / boss-right, and a party
+   of five pushed its rightmost member to screen x 0.53 -- into the space
+   the boss occupies. Dropping one shrinks the formation to 0.47 and opens
+   the right half of frame; layoutParty handles the respacing.
+
+   Names double as ActorIds. The first member has real art; the rest stay
+   procedural until their PNGs exist. */
+const PARTY_NAMES = ['kira', 'neo', 'vex', 'lyra'] as const;
+
+/** Matches the boss actor id in the battle roster. */
+const BOSS_NAME = 'apollyon';
 
 /** Served from the web root -- public/ is copied there by Vite. */
 const KIRA_TEXTURE_URL = './characters/kira.png';
@@ -167,6 +180,7 @@ async function main(
         const head = sprite.headScreenPosition(battle.camera);
         return {
           name: sprite.name,
+          side: sprite.side,
           position: [
             sprite.group.position.x,
             sprite.group.position.y,
@@ -215,23 +229,33 @@ async function main(
      runs, and `ready` stays false -- see the catch at the bottom. */
   const kira = await loadCharacterTexture(KIRA_TEXTURE_URL);
 
-  /* One spawnCast call for the whole party. assignRenderOrders() ranks the
-     cast in a single pass, so splitting real art from placeholders would
-     produce two independent draw sequences that collide.
+  /* ONE spawnCast call for the whole cast, boss included.
+     assignRenderOrders() ranks everyone in a single pass, so spawning the
+     party and the boss separately would produce two independent draw
+     sequences that collide -- and the boss, being furthest back, is exactly
+     the sprite that has to draw first.
 
      One texture per sprite, never shared: CharacterSprite.dispose()
      disposes its own map, so a shared texture would be destroyed the first
      time any one of its sprites went away. */
   const partyPositions = layoutParty(PARTY_NAMES.length);
 
-  battle.spawnCast(
-    PARTY_NAMES.map((name, index) => ({
+  battle.spawnCast([
+    ...PARTY_NAMES.map((name, index) => ({
       name,
+      side: 'party' as const,
       texture: index === 0 ? kira : createPlaceholderCharacterTexture(),
       worldHeight: 2.2,
       position: partyPositions[index] ?? { x: 0, y: 0, z: 0 },
     })),
-  );
+    {
+      name: BOSS_NAME,
+      side: 'enemy' as const,
+      texture: createPlaceholderBossTexture(),
+      worldHeight: DEFAULT_BOSS_PLACEMENT.worldHeight,
+      position: bossPosition(),
+    },
+  ]);
 
   /* --- Go --------------------------------------------------------- */
 

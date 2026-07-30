@@ -53,6 +53,8 @@ export interface DebugState {
    */
   sprites: Array<{
     name: string;
+    /** Which side the character fights for. Also its ActorId's side. */
+    side: 'party' | 'enemy';
     /** Feet position in world space. */
     position: [number, number, number];
     /** Derived from the texture aspect -- a 1:1 ratio usually means the

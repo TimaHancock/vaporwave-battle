@@ -29,6 +29,9 @@ import {
   SHADOW_RENDER_ORDER,
   type Vec3,
 } from './spriteLayout';
+/* Type-only: erases at build time, so the sprite layer shares battle
+   vocabulary without importing any battle logic. */
+import type { Side } from '../battle/types';
 
 /* ------------------------------------------------------------------ */
 /* Configuration                                                       */
@@ -43,8 +46,11 @@ export interface CharacterSpriteOptions {
   position: Vec3;
   /** Draw sequence, from assignRenderOrders(). Furthest sprite gets lowest. */
   renderOrder: number;
-  /** Name for debugging and for finding the sprite later. */
+  /** Name for debugging and for finding the sprite later. Also the ActorId. */
   name: string;
+
+  /** Which side the character fights for. Reported through the debug channel. */
+  side: Side;
 
   /**
    * Alpha cutoff, 0..1. Fragments below this are discarded outright.
@@ -100,6 +106,7 @@ export interface CharacterSprite {
   readonly mesh: THREE.Mesh;
   readonly shadow: THREE.Mesh | null;
   readonly name: string;
+  readonly side: Side;
   /** Sprite dimensions in world units, derived from the texture aspect. */
   readonly size: { width: number; height: number };
   /**
@@ -321,6 +328,7 @@ export function createCharacterSprite(
     position,
     renderOrder,
     name,
+    side,
     alphaTest = 0.15,
     toneMapped = true,
     shadowOpacity = 0.45,
@@ -475,6 +483,7 @@ export function createCharacterSprite(
     mesh,
     shadow,
     name,
+    side,
     size,
     feetInset,
     contentHeight,
@@ -685,6 +694,161 @@ export function createPlaceholderCharacterTexture(
   ctx.lineTo(px(0.30), py(0.45));
   ctx.lineTo(px(0.36), py(0.63));
   ctx.lineTo(px(0.36), py(0.97));
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/**
+ * Draws a stand-in boss silhouette.
+ *
+ * A SEPARATE SHAPE, NOT A SCALED KNIGHT
+ * -------------------------------------
+ * The placeholder's job is to be unmistakably a placeholder AND
+ * unmistakably the opponent. Reusing the party silhouette at 1.64x reads as
+ * a party member standing closer to the camera, which is precisely the
+ * misreading the composition has to avoid -- and it would make the shot
+ * useless for judging whether party-left / boss-right actually works.
+ *
+ * 768x1024 rather than the party's 512x1024. At worldHeight 3.6 that is 2.7
+ * units across: a low, broad stance the taller-than-wide party art cannot
+ * produce at any scale.
+ *
+ * It obeys the same authoring contract as the party placeholder and
+ * public/characters/README.md -- hard-edged rims inside the silhouette,
+ * magenta right and cyan left, a generous transparent margin, key light
+ * from the upper front-left -- so it doubles as the spec real boss art will
+ * be measured against.
+ */
+export function createPlaceholderBossTexture(
+  options: PlaceholderOptions = {},
+): THREE.CanvasTexture {
+  const {
+    width = 768,
+    height = 1024,
+    /* Deliberately lighter than it looks like it should be. The first
+       version used #1B0714, only 1.3x the #13060D backdrop's luminance, and
+       the whole body dissolved into the sky -- the exact failure
+       public/characters/README.md warns about under "value separation".
+       This sits at ~2.4x, still menacing, still readable. */
+    bodyColour = '#330C26',
+    /* Rose rather than the party's pale lavender-white. Same key direction,
+       different temperature: the antagonist should not be lit like a hero. */
+    litColour = '#B02961',
+    rimRightColour = '#C61E82',
+    rimLeftColour = '#22E0FF',
+  } = options;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) {
+    throw new Error('2D canvas context unavailable -- cannot build boss placeholder');
+  }
+
+  const px = (x: number): number => x * width;
+  const py = (y: number): number => y * height;
+
+  type Point = readonly [number, number];
+
+  const trace = (points: readonly Point[]): void => {
+    const [first, ...rest] = points as [Point, ...Point[]];
+    ctx.moveTo(px(first[0]), py(first[1]));
+    for (const [x, y] of rest) ctx.lineTo(px(x), py(y));
+  };
+
+  const fillPath = (points: readonly Point[], colour: string): void => {
+    if (points.length === 0) return;
+    ctx.beginPath();
+    trace(points);
+    ctx.closePath();
+    ctx.fillStyle = colour;
+    ctx.fill();
+  };
+
+  /* --- ONE CONNECTED SILHOUETTE ------------------------------------
+   *
+   * Drawn as a single closed outline rather than assembled from separate
+   * limb shapes, for one reason: the rim lights are strokes along THIS
+   * path. The first version drew limbs independently and then placed rim
+   * strokes at hand-picked coordinates, which put them somewhere in the
+   * middle of the body instead of on its edge -- a rim light that does not
+   * trace the silhouette reads as a crack, not as light.
+   *
+   * Clockwise from the left horn. Indices into this array are used below to
+   * slice out the left and right edges, so inserting a point means checking
+   * the two slice ranges.
+   */
+  const OUTLINE: readonly Point[] = [
+    [0.42, 0.14], // 0  left horn root
+    [0.34, 0.03], // 1  left horn tip
+    [0.46, 0.11], // 2
+    [0.54, 0.11], // 3
+    [0.66, 0.03], // 4  right horn tip
+    [0.58, 0.14], // 5  right horn root
+    [0.61, 0.23], // 6  jaw right
+    [0.71, 0.27], // 7  shoulder right
+    [0.93, 0.15], // 8  right wing tip
+    [0.87, 0.42], // 9  right wing lower
+    [0.74, 0.47], // 10 right wing root
+    [0.73, 0.62], // 11 hip right
+    [0.81, 0.96], // 12 right foot outer
+    [0.61, 0.96], // 13 right foot inner
+    [0.56, 0.74], // 14
+    [0.50, 0.82], // 15 crotch
+    [0.44, 0.74], // 16
+    [0.39, 0.96], // 17 left foot inner
+    [0.19, 0.96], // 18 left foot outer
+    [0.27, 0.62], // 19 hip left
+    [0.26, 0.47], // 20 left wing root
+    [0.13, 0.42], // 21 left wing lower
+    [0.07, 0.15], // 22 left wing tip
+    [0.29, 0.27], // 23 shoulder left
+    [0.39, 0.23], // 24 jaw left
+  ];
+
+  fillPath(OUTLINE, bodyColour);
+
+  /* --- Lit facets: upper LEFT, matching the scene key ---------------
+   * Kept inside the silhouette and off the head, so the crown stays a
+   * readable shape rather than merging into one bright mass. */
+  fillPath(
+    [
+      [0.29, 0.27],
+      [0.50, 0.30],
+      [0.50, 0.66],
+      [0.36, 0.60],
+      [0.28, 0.44],
+    ],
+    litColour,
+  );
+  // Left wing, catching the same light.
+  fillPath([[0.26, 0.47], [0.13, 0.42], [0.09, 0.22], [0.24, 0.34]], litColour);
+  // Left horn.
+  fillPath([[0.42, 0.14], [0.34, 0.03], [0.46, 0.11], [0.44, 0.19]], litColour);
+
+  /* --- Rim lights: hard-edged strokes ALONG the outline -------------
+   *
+   * Sliced straight out of OUTLINE so they cannot drift off the edge.
+   * Right side magenta, left side cyan -- the same agreement with the
+   * scene's rim lights that the party art follows. */
+  ctx.lineWidth = Math.max(3, width * 0.012);
+  ctx.lineJoin = 'miter';
+  ctx.lineCap = 'round';
+
+  ctx.strokeStyle = rimRightColour;
+  ctx.beginPath();
+  trace(OUTLINE.slice(5, 14)); // jaw right -> right foot inner
+  ctx.stroke();
+
+  ctx.strokeStyle = rimLeftColour;
+  ctx.beginPath();
+  trace(OUTLINE.slice(18, 25)); // left foot outer -> jaw left
   ctx.stroke();
 
   const texture = new THREE.CanvasTexture(canvas);

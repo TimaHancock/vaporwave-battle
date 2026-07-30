@@ -262,6 +262,79 @@ function fitSpacingToPlatform(
   return Math.max(0, allowed);
 }
 
+/* ------------------------------------------------------------------ */
+/* Boss placement                                                      */
+/* ------------------------------------------------------------------ */
+
+export interface BossPlacement {
+  x: number;
+  z: number;
+  /** World height. The party stands 2.2, so this is the size relationship. */
+  worldHeight: number;
+}
+
+/**
+ * Where the boss stands, and how big it is.
+ *
+ * Constrained rather than eyeballed, the same way DEFAULT_PARTY_LAYOUT is:
+ *
+ *   x = 2.6   puts its head at screen x 0.74 -- the right of frame, clear
+ *             of a four-member party whose rightmost head sits at 0.47.
+ *   z = 0.2   the SAME LINE as the party's outer members, which sit at
+ *             z 0.2 on the arc. The two sides face off across one rank
+ *             rather than the boss looming from a second row. Standing it
+ *             back at -2.2 read as depth staging, but it also shrank the
+ *             boss by distance and separated the sides into two planes.
+ *   height    3.6 is 1.64x the party. Imposing without dominating, and it
+ *             puts the head at screen y 0.23 -- below the APOLLYON LV95
+ *             bar, so a damage number anchored there is not fighting the
+ *             HUD for the same pixels.
+ *
+ * Sharing a z with the party is what makes the tie-break in
+ * assignRenderOrders load-bearing; see the note there.
+ *
+ * Feet land 2.61 from the platform centre, comfortably inside
+ * PLATFORM_SAFE_RADIUS.
+ */
+export const DEFAULT_BOSS_PLACEMENT: BossPlacement = {
+  x: 2.6,
+  z: 0.2,
+  worldHeight: 3.6,
+};
+
+/**
+ * Feet position for the boss, checked against the platform.
+ *
+ * The same reasoning as fitSpacingToPlatform: a sprite past the lip stands
+ * on nothing and its contact shadow floats over empty space, and that is a
+ * bug you only notice by looking. layoutParty already guarantees it for the
+ * party; a boss positioned by a literal in main.ts would be the one sprite
+ * in the scene with no such guarantee.
+ *
+ * Rejected rather than clamped. Clamping would move a boss the caller
+ * deliberately placed and leave them wondering why it is not where they put
+ * it; the party case can clamp because "about this far apart" is a request,
+ * whereas a boss position is an instruction.
+ */
+export function bossPosition(placement: BossPlacement = DEFAULT_BOSS_PLACEMENT): Vec3 {
+  const { x, z, worldHeight } = placement;
+
+  if (worldHeight <= 0) {
+    throw new Error(`Boss worldHeight must be positive, got ${worldHeight}`);
+  }
+
+  const distance = Math.hypot(x, z);
+  if (distance > PLATFORM_SAFE_RADIUS) {
+    throw new Error(
+      `Boss at (${x}, ${z}) is ${distance.toFixed(2)} from the platform centre, ` +
+        `past PLATFORM_SAFE_RADIUS ${PLATFORM_SAFE_RADIUS}. It would stand on ` +
+        `nothing with its contact shadow floating.`,
+    );
+  }
+
+  return { x, y: 0, z };
+}
+
 /**
  * Furthest any position sits from the platform centre, on the ground plane.
  *
@@ -305,13 +378,23 @@ export const SPRITE_RENDER_ORDER_BASE = 10;
  *
  * Returns render orders parallel to the input array (input index i maps to
  * output index i), so callers can apply them without re-sorting.
+ *
+ * TIES IN Z ARE BROKEN BY X, NOT BY ARRAY POSITION. Sprites standing on one
+ * rank share a z exactly -- the party's arc puts its outer members level
+ * with each other, and the boss now stands on that same line. Array.sort is
+ * stable, so without an explicit tie-break the draw sequence among them
+ * would be decided by the order the caller happened to build the cast in,
+ * and reordering a roster literal would silently change it. Same reasoning
+ * as the id tie-break in buildRound: sort by a total order or the
+ * reproducibility promise is not real.
  */
 export function assignRenderOrders(positions: readonly Vec3[]): number[] {
   // Pair each position with its original index, sort back-to-front, then
   // scatter the resulting ranks back into original-index order.
   const ranked = positions
-    .map((position, index) => ({ index, z: position.z }))
-    .sort((a, b) => a.z - b.z); // most negative (furthest) first
+    .map((position, index) => ({ index, z: position.z, x: position.x }))
+    // most negative z (furthest) first, then left to right
+    .sort((a, b) => a.z - b.z || a.x - b.x)
 
   const orders = new Array<number>(positions.length);
   ranked.forEach((entry, rank) => {

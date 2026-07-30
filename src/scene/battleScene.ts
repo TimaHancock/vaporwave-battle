@@ -15,6 +15,9 @@ import * as THREE from 'three';
 import type { Rng } from '../rng';
 import { createCharacterSprite, type CharacterSprite } from './sprite';
 import { assignRenderOrders, type Vec3 } from './spriteLayout';
+/* Type-only, so it erases at build time -- the scene shares battle
+   vocabulary without taking a dependency on battle logic. */
+import type { Side } from '../battle/types';
 
 /* ------------------------------------------------------------------ */
 /* Camera rig -- CANONICAL. Do not change without updating CLAUDE.md.  */
@@ -113,7 +116,20 @@ export class DisposalRegistry {
 
 /** One character to place on the platform. */
 export interface CastEntry {
+  /**
+   * Identifies the sprite, and doubles as the ActorId it corresponds to in
+   * BattleState. That correspondence is what will let a `damage` event's
+   * targetId resolve to a sprite and get a screen anchor from
+   * headScreenPosition() when damage numbers arrive.
+   */
   name: string;
+  /**
+   * Which side this character fights for. The scene uses it only to report
+   * through the debug channel -- no rendering decision depends on it -- but
+   * without it the harness cannot tell a party member from the boss, and
+   * "the party stays left of frame" becomes unassertable.
+   */
+  side: Side;
   texture: THREE.Texture;
   /** World height. ~2.2 reads as an adult human against this platform. */
   worldHeight: number;
@@ -393,6 +409,7 @@ export function createBattleScene(rng: Rng): BattleScene {
           position: entry.position,
           renderOrder: orders[index] ?? 0,
           name: entry.name,
+          side: entry.side,
           ...(entry.alphaTest === undefined ? {} : { alphaTest: entry.alphaTest }),
         });
         cast.push(sprite);

@@ -107,7 +107,11 @@ test.describe('sprite billboard layer', () => {
 
     const sprites = await page.evaluate(() => window.__debugState!.sprites);
 
-    expect(sprites).toHaveLength(5);
+    // Four party members and one boss. Asserted by side rather than by a
+    // bare total, so losing a party member and gaining a second boss cannot
+    // pass as "still five sprites".
+    expect(sprites.filter((s) => s.side === 'party')).toHaveLength(4);
+    expect(sprites.filter((s) => s.side === 'enemy')).toHaveLength(1);
 
     for (const sprite of sprites) {
       // Feet on the ground plane. A non-zero y means the grounding maths
@@ -121,7 +125,11 @@ test.describe('sprite billboard layer', () => {
       // the sprite was built -- the aspect collapses and the character
       // renders as a sliver.
       expect(sprite.size[0]).not.toBeCloseTo(sprite.size[1], 3);
-      expect(sprite.size[1]).toBeCloseTo(2.2, 3);
+
+      // The boss is deliberately larger than the party; a boss that came
+      // through at party height means its placement constants were lost.
+      const expectedHeight = sprite.side === 'enemy' ? 3.6 : 2.2;
+      expect(sprite.size[1], `${sprite.name} height`).toBeCloseTo(expectedHeight, 3);
     }
   });
 
@@ -171,17 +179,46 @@ test.describe('sprite billboard layer', () => {
       }
     });
 
-    test('party occupies the left of frame, leaving room for the boss', async ({
-      page,
-    }) => {
+    test('party holds the left of frame and the boss the right', async ({ page }) => {
       await page.goto('/?seed=1337&time=0');
       await page.waitForFunction(() => window.__debugState?.ready === true);
 
       const sprites = await page.evaluate(() => window.__debugState!.sprites);
-      const rightmost = Math.max(...sprites.map((sprite) => sprite.headScreen[0]));
+      const party = sprites.filter((s) => s.side === 'party');
+      const boss = sprites.find((s) => s.side === 'enemy');
 
-      /* Composition contract from the reference art: party left, boss right. */
-      expect(rightmost).toBeLessThan(0.6);
+      expect(party.length).toBeGreaterThan(0);
+      expect(boss).toBeDefined();
+
+      /* Composition contract from the reference art: party left, boss right.
+         Both halves are asserted. Checking only that the party stays left
+         would pass a scene with no boss at all -- which is exactly what it
+         used to be doing. */
+      const rightmostParty = Math.max(...party.map((sprite) => sprite.headScreen[0]));
+      expect(rightmostParty, 'rightmost party member').toBeLessThan(0.6);
+      expect(boss!.headScreen[0], 'boss').toBeGreaterThan(0.6);
+
+      /* Visible separation between the two sides, not merely an ordering. */
+      expect(boss!.headScreen[0] - rightmostParty).toBeGreaterThan(0.15);
+    });
+
+    test('boss head clears the HUD boss bar', async ({ page }) => {
+      await page.goto('/?seed=1337&time=0');
+      await page.waitForFunction(() => window.__debugState?.ready === true);
+
+      const sprites = await page.evaluate(() => window.__debugState!.sprites);
+      const boss = sprites.find((s) => s.side === 'enemy')!;
+
+      /* A damage number anchored to the boss head renders upward from it.
+         The APOLLYON bar occupies the top of frame, so a head sitting too
+         high puts the two in the same pixels. */
+      const bar = page.locator('[data-testid="boss-bar"]');
+      const barBox = await bar.boundingBox();
+      const viewport = page.viewportSize()!;
+
+      expect(barBox).not.toBeNull();
+      const barBottom = (barBox!.y + barBox!.height) / viewport.height;
+      expect(boss.headScreen[1], 'boss head y').toBeGreaterThan(barBottom);
     });
 
     test('every sprite stands on the platform, not off its edge', async ({ page }) => {
