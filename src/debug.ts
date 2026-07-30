@@ -39,6 +39,9 @@ export interface DebugState {
     textures: number;
   };
 
+  /** Bloom post-processing parameters, mirrored so shots can assert them. */
+  post: { strength: number; radius: number; threshold: number };
+
   /**
    * Character sprites currently on the platform.
    *

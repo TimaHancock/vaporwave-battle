@@ -211,8 +211,12 @@ export function createBattleScene(rng: Rng): BattleScene {
   const columnMaterial = registry.track(
     new THREE.MeshStandardMaterial({
       color: PALETTE.chrome,
-      roughness: 0.15,
-      metalness: 0.95,
+      /* Roughness broadens and dims the key-light glint. At 0.15 the highlight
+         was a pinpoint that clipped to white and bloomed into a harsh star;
+         0.5 spreads it into a soft sheen the bloom pass no longer blows out.
+         Emissive neon is unaffected, so grid/sun/edge glow is unchanged. */
+      roughness: 0.5,
+      metalness: 0.9,
     }),
   );
   for (const x of [-5.2, 5.2]) {
@@ -230,9 +234,14 @@ export function createBattleScene(rng: Rng): BattleScene {
     new THREE.MeshStandardMaterial({
       color: PALETTE.signal,
       emissive: PALETTE.horizon,
+      /* Emissive drives the magenta neon glow -- left untouched so the dice
+         keep blooming the same. The specular facets read too bright against
+         the scene, so roughness is raised (-> 0.7, broadens/dims the glint)
+         and metalness lowered (-> 0.35, shifts more of the key light into
+         soft diffuse rather than a hot mirror highlight). */
       emissiveIntensity: 0.35,
-      roughness: 0.3,
-      metalness: 0.6,
+      roughness: 0.7,
+      metalness: 0.35,
       flatShading: true,
     }),
   );

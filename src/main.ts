@@ -16,6 +16,7 @@
 import './style.css';
 import * as THREE from 'three';
 import { createBattleScene, CAMERA } from './scene/battleScene';
+import { createPostProcessing } from './scene/post';
 import { createPlaceholderCharacterTexture } from './scene/sprite';
 import { layoutParty } from './scene/spriteLayout';
 import { renderHud, type HudModel } from './ui/hud';
@@ -63,11 +64,21 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 /* Tone mapping matters for the aesthetic: neon emissive colours blow out
    to white without it. ACESFilmic keeps the magenta reading as magenta at
-   high intensity. Revisit when bloom lands in Phase 4b. */
+   high intensity. These settings are now consumed by the bloom pipeline's
+   OutputPass (see scene/post.ts), which applies tone mapping + sRGB encode
+   once at the end of the chain -- so they stay here, unchanged. */
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 
+/* The composer issues many internal render calls per frame (scene, bloom mip
+   passes, output). With autoReset on, renderer.info would report only the last
+   pass -- a single fullscreen quad -- making the drawCalls/triangles debug
+   channel useless. Disable it and reset once per frame instead, so the stats
+   capture the whole pipeline's GPU work. */
+renderer.info.autoReset = false;
+
 const battle = createBattleScene(rng);
+const post = createPostProcessing(renderer, battle.scene, battle.camera);
 
 /* ---------------------------------------------------------------- */
 /* Character cast                                                    */
@@ -120,6 +131,7 @@ function resize(): void {
   battle.camera.aspect = width / height;
   battle.camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
+  post.setSize(width, height);
 }
 
 window.addEventListener('resize', resize);
@@ -144,6 +156,11 @@ function snapshot(time: number, ready: boolean): DebugState {
       triangles: renderer.info.render.triangles,
       geometries: renderer.info.memory.geometries,
       textures: renderer.info.memory.textures,
+    },
+    post: {
+      strength: post.params.strength,
+      radius: post.params.radius,
+      threshold: post.params.threshold,
     },
     sprites: battle.sprites.map((sprite) => {
       const head = sprite.headScreenPosition(battle.camera);
@@ -180,7 +197,8 @@ const clock = new THREE.Clock();
 
 function drawFrame(elapsed: number): void {
   battle.update(elapsed);
-  renderer.render(battle.scene, battle.camera);
+  renderer.info.reset();
+  post.composer.render();
   publishDebugState(snapshot(elapsed, true));
 }
 

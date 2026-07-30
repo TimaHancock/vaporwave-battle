@@ -60,7 +60,8 @@ async function main() {
     });
     page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
-    const url = `${BASE_URL}/?seed=${shot.seed}&time=${shot.time}`;
+    const extra = shot.query ? `&${shot.query}` : '';
+    const url = `${BASE_URL}/?seed=${shot.seed}&time=${shot.time}${extra}`;
 
     try {
       await page.goto(url, { waitUntil: 'load' });

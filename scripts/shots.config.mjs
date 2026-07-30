@@ -43,4 +43,17 @@ export const SHOTS = [
     seed: 1337,
     time: 1.0,
   },
+  {
+    name: 'bloom_off',
+    description: 'Neon with bloom disabled -- baseline for the on/off diff.',
+    seed: 1337,
+    time: 4.0,
+    query: 'bloom=0',
+  },
+  {
+    name: 'bloom_on',
+    description: 'Neon with default bloom -- soft cohesive glow, no hot spots.',
+    seed: 1337,
+    time: 4.0,
+  },
 ];
