@@ -56,6 +56,18 @@ characters, DOM interface. One arena, one boss, one locked camera.
 own servers — but `e2e:dist` serves `dist/`, so build first or it tests the
 previous build.
 
+### Git
+
+**`main` is the deploy branch.** A push to it runs
+`.github/workflows/azure-static-web-apps.yml` and deploys to Azure, so work on
+a branch and merge deliberately. The gates catch broken code; they cannot
+catch half-finished code, which passes everything and still ships a
+wrong-looking HUD.
+
+Commit at verified checkpoints rather than per edit — the table above says
+which gates apply to what, and a commit that has not passed them is not a
+checkpoint. Pushing is the deploy decision and stays manual.
+
 ## Verification
 
 Four channels, each with one job:
