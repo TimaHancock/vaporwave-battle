@@ -45,6 +45,63 @@
   --gap-lg: 1.5rem;
 
   --edge: 1px solid color-mix(in srgb, var(--signal) 45%, transparent);
+
+  /* Panel surface. The menu and the party cards share it so the interface
+     reads as one system rather than two that happen to be on screen. */
+  --surface: color-mix(in srgb, var(--void) 88%, transparent);
+
+  /* Height of the party card strip along the bottom.
+     NOT free to grow. The camera is locked, and a sprite's feet at world
+     y = 0 project to screen y 0.743 at 16:9. At 720p that is 535px down,
+     leaving 185px of frame below it -- so a strip taller than this starts
+     eating the contact shadows that ground the characters. e2e/hud.spec.ts
+     asserts the top edge stays below 0.76. */
+  --card-strip: 7.5rem;
+
+  /* Gauge fills. Every stop is an existing palette token: HP runs the
+     magenta pair, MP the lavender, and a low bar switches to ember -- which
+     is the palette's warning colour and already carries that meaning on the
+     boss readout. Cyan appears in none of them: it is a 1px rule only. */
+  --gauge-hp: linear-gradient(90deg, var(--horizon), var(--rose));
+  --gauge-low: linear-gradient(90deg, var(--ember-deep), var(--ember));
+  --gauge-mp: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--chrome) 70%, var(--rose)),
+    var(--chrome)
+  );
+
+  /* One duration for every bar, so HP and MP cannot drift out of step. */
+  --bar-motion: 400ms;
+
+  /* Card state.
+     CYAN MARKS THE ACTIVE CARD, magenta the idle ones -- the inverse of the
+     first pass, which had the active card magenta on a magenta-dominant
+     scene and made the player hunt for their own turn. The strip is three
+     quarters idle, so the eye should land on the card that is not; cyan is
+     the one accent absent from everything behind it, so nothing competes.
+     It also already means "you are here" on the selected menu item.
+
+     This keeps cyan a LINE, per the palette rule above: the rule is a 2px
+     rule and the glow is bloom around it, never a fill. */
+  --card-border: 2px;
+  --card-edge-idle: color-mix(in srgb, var(--horizon) 70%, transparent);
+  --card-edge-active: color-mix(in srgb, var(--signal) 90%, transparent);
+
+  /* Idle sits on void-deep, active on void. The active card is literally the
+     lighter surface, so it reads as lit rather than merely outlined. */
+  --card-surface-idle: color-mix(in srgb, var(--void-deep) 90%, transparent);
+  --card-surface-active: color-mix(in srgb, var(--void) 88%, transparent);
+
+  /* Faster than --bar-motion. A turn handover should settle inside one
+     sequencer beat, which defaults to 350ms; a bar drain is its own event
+     and can take longer. */
+  --card-motion: 300ms;
+
+  /* How much larger the active card sits. NOT free to raise: the card grows
+     by transform, so half the extra width eats into the gap between cards.
+     At 1280 the gap is 16px and this leaves 8.5px of clearance --
+     e2e/hud.spec.ts asserts the cards never overlap. */
+  --card-scale-active: 1.05;
 }
 
 * {
@@ -124,11 +181,13 @@ body {
 .hud-menu {
   position: absolute;
   left: var(--gap-md);
-  bottom: var(--gap-md);
+  /* Lifted to clear the party cards. Position only -- the menu's own styling
+     is the next pass. */
+  bottom: calc(var(--card-strip) + var(--gap-md));
   min-width: 11rem;
   padding: var(--gap-sm) var(--gap-md);
   border: var(--edge);
-  background: color-mix(in srgb, var(--void) 88%, transparent);
+  background: var(--surface);
   backdrop-filter: blur(2px);
   pointer-events: auto;
 }
@@ -187,20 +246,269 @@ body {
 .hud-narration {
   position: absolute;
   left: 13.5rem;
-  bottom: 1.6rem;
+  bottom: calc(var(--card-strip) + var(--gap-md));
   margin: 0;
   padding: var(--gap-sm) var(--gap-md);
   max-width: min(32rem, 50vw);
   border: var(--edge);
-  background: color-mix(in srgb, var(--void) 88%, transparent);
+  background: var(--surface);
   font-size: 0.85rem;
   letter-spacing: 0.04em;
 }
 
+/* ---------- Party cards ---------- */
+
+.hud-party {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--card-strip);
+  margin: 0;
+  padding: 0 var(--gap-md) var(--gap-md);
+  list-style: none;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  /* Wide enough to absorb the active card's scale. At --gap-sm the scaled
+     card cleared its neighbour by 0.4px, which means its glow touched. This
+     also lands four cards on exactly 1248px at 1280, so the strip starts
+     flush with the command menu's left edge. */
+  gap: var(--gap-md);
+}
+
+.hud-card {
+  flex: 1 1 0;
+  /* Capped so four cards on a wide screen stay card-shaped instead of
+     stretching into banners. 19rem is chosen against the canonical 16:9: four
+     of them plus the gaps just fill 1280 minus the HUD padding, so the strip
+     lines up with the command menu's left edge instead of floating 68px
+     inside it. */
+  max-width: 19rem;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm);
+  border: var(--card-border) solid var(--card-edge-idle);
+  background-color: var(--card-surface-idle);
+  backdrop-filter: blur(2px);
+  /* A faint magenta bloom so an idle card still reads as neon rather than as
+     a flat panel -- it is recessive, not absent. */
+  box-shadow: 0 0 10px color-mix(in srgb, var(--horizon) 20%, transparent);
+  /* Grows upward from the strip's baseline, never down off the frame. */
+  transform: scale(1);
+  transform-origin: bottom center;
+  /* ease-in-out, and the same curve on both cards: the outgoing card shrinks
+     and dims as the incoming one grows and lights, over one duration, so the
+     highlight reads as MOVING between them rather than teleporting.
+     opacity keeps its own timing -- the defeated fade is a different event
+     from a turn handover and should not be tied to it. */
+  transition: border-color var(--card-motion) ease-in-out,
+    background-color var(--card-motion) ease-in-out,
+    box-shadow var(--card-motion) ease-in-out,
+    transform var(--card-motion) ease-in-out,
+    opacity var(--bar-motion) ease-out;
+}
+
+/* Whose turn it is: a cyan rule, a cyan glow, the lighter surface, and a
+   little more size. Four signals rather than one, because a single one of
+   them was not enough to find the card at a glance.
+
+   Deliberately NO `will-change: transform`. Forcing a permanent compositor
+   layer would leave the 0.6rem HP numbers rasterised at 1.0 and scaled up --
+   permanently soft. Without it the text is only soft during the handover and
+   crisp at rest. */
+.hud-card[aria-current='true'] {
+  border-color: var(--card-edge-active);
+  background-color: var(--card-surface-active);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--signal) 45%, transparent),
+    0 0 8px color-mix(in srgb, var(--signal) 60%, transparent),
+    inset 0 0 16px color-mix(in srgb, var(--signal) 10%, transparent);
+  transform: scale(var(--card-scale-active));
+  /* Flex items honour z-index without position. Without this the glow is
+     drawn under the neighbouring cards and clipped into a hard edge. */
+  z-index: 1;
+}
+
+.hud-card[data-defeated] {
+  opacity: 0.45;
+  filter: grayscale(0.7);
+}
+
+.hud-card__portrait {
+  flex: 0 0 auto;
+  width: 3.4rem;
+  height: 3.4rem;
+  border: var(--edge);
+  /* Plum behind the art, not transparency: the source PNGs are cutouts, so
+     without this a portrait is a hole showing the battle through it. */
+  background-color: var(--plum);
+  background-image: var(--portrait-src, none);
+  /* Height-relative zoom -- Lyra's frame is 640 wide where the rest are 512,
+     and a width-relative zoom would need her to be a special case. See
+     src/ui/portraits.ts for where these numbers come from. */
+  background-size: auto calc(var(--portrait-zoom, 1) * 100%);
+  background-position: var(--portrait-x, 50%) var(--portrait-y, 50%);
+  background-repeat: no-repeat;
+}
+
+.hud-card__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.hud-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-xs);
+}
+
+.hud-card__name {
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--chrome);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-card__level {
+  flex: 0 0 auto;
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--chrome) 55%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Gauges ---------- */
+
+.hud-card__gauge {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+}
+
+.hud-card__key {
+  flex: 0 0 auto;
+  width: 1.4rem;
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  color: color-mix(in srgb, var(--chrome) 50%, transparent);
+}
+
+.hud-card__track {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 0.4rem;
+  /* Cyan as a thin line only -- the track's 1px rule, never its fill. */
+  border: var(--edge);
+  background: color-mix(in srgb, var(--void) 80%, transparent);
+  overflow: hidden;
+}
+
+.hud-card__fill {
+  display: block;
+  height: 100%;
+  background: var(--gauge-hp);
+  transition: width var(--bar-motion) ease-out;
+}
+
+.hud-card__gauge--mp .hud-card__fill {
+  background: var(--gauge-mp);
+}
+
+/* Set from HudActor.isHpLow, which is derived and unit-tested in ui/hud.ts --
+   the threshold is not a CSS decision. */
+.hud-card__gauge--hp[data-low] .hud-card__fill {
+  background: var(--gauge-low);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--ember) 55%, transparent);
+}
+
+.hud-card__value {
+  flex: 0 0 auto;
+  font-size: 0.6rem;
+  color: color-mix(in srgb, var(--chrome) 80%, transparent);
+  /* Explicit rather than inherited from body: a display face chosen for the
+     cards later must not silently reintroduce jitter as digits change. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Status badges ---------- */
+
+.hud-card__statuses {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+  /* Reserve the row so a card does not resize the instant a buff lands. */
+  min-height: 0.85rem;
+}
+
+.hud-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0 0.25rem;
+  border: var(--edge);
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--chrome) 75%, transparent);
+}
+
+/* The glyph is a pseudo-element ON PURPOSE. Pseudo-element content is
+   excluded from textContent, which is what the suite reads, so a card can
+   carry an icon and `actor-kira-statuses` can still read exactly `DEF_UP`.
+   Moving these into the text would break e2e/battle.spec.ts. */
+.hud-status::before {
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.hud-status[data-kind='ATK_UP']::before {
+  content: '\25B2';
+  color: var(--ember);
+}
+
+.hud-status[data-kind='DEF_UP']::before {
+  content: '\25C6';
+  color: var(--chrome);
+}
+
+.hud-status[data-kind='HASTE']::before {
+  content: '\00BB';
+  color: var(--horizon);
+}
+
 /* ---------- Accessibility floor ---------- */
 
+/* In the DOM and the accessibility tree, out of the picture. Carries the
+   enemy's numbers, which have no visual design until the boss-bar pass -- see
+   buildEnemyReadout in src/ui/hud.ts for why they cannot just go under the
+   boss bar. */
+.hud-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .hud-boss__fill {
+  .hud-boss__fill,
+  .hud-card__fill,
+  .hud-card {
     transition: none;
   }
 }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { toHudModel, TURN_PREVIEW_LENGTH } from './hud';
+import { LOW_HP_FRACTION, toHudModel, TURN_PREVIEW_LENGTH } from './hud';
 import { INITIAL_MENU } from './menu';
 import { createBattle } from '../battle/battle';
-import { makeBoss, makeParty, makeRoster } from '../battle/fixtures';
+import { makeActor, makeBoss, makeParty, makeRoster } from '../battle/fixtures';
 import type { BattleState } from '../battle/types';
 
 /**
@@ -114,6 +114,85 @@ describe('toHudModel', () => {
       'defend',
     ]);
     expect(model().cursor).toBe(0);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Card derivations                                                  */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * A party card shows a level and two bars, and the bars are coloured by a
+   * threshold. All three are derivations, so all three live here rather than
+   * in renderHud -- which is the whole reason this file can test them without
+   * a browser.
+   */
+  describe('the numbers a party card renders', () => {
+    /** One actor at chosen HP/MP, wrapped in a legal battle state. */
+    const at = (hp: number, mp = 120, maxHp = 1500) => {
+      const base = createBattle(1, makeRoster());
+      const state: BattleState = {
+        ...base,
+        actors: base.actors.map((actor) =>
+          actor.id === 'kira'
+            ? { ...actor, hp, mp, stats: { ...actor.stats, maxHp } }
+            : actor,
+        ),
+      };
+      return model(state).actors.find((actor) => actor.id === 'kira')!;
+    };
+
+    it('carries each actor level, which the bare rows never needed', () => {
+      const actors = model().actors;
+      expect(actors.find((a) => a.id === 'kira')?.level).toBe(70);
+      expect(actors.find((a) => a.id === 'apollyon')?.level).toBe(95);
+    });
+
+    it('reports HP and MP as fractions of their maximum', () => {
+      expect(at(1500).hpFraction).toBe(1);
+      expect(at(750).hpFraction).toBe(0.5);
+      expect(at(0).hpFraction).toBe(0);
+      expect(at(1500, 30).mpFraction).toBe(0.25);
+    });
+
+    it('clamps a fraction into 0..1 rather than overflowing the track', () => {
+      /* Overheal and negative HP are both states the battle layer may hold
+         transiently. Neither should push a fill past its track or invert it. */
+      expect(at(-400).hpFraction).toBe(0);
+      expect(at(9000).hpFraction).toBe(1);
+    });
+
+    it('returns 0, not NaN, when a maximum is zero', () => {
+      /* `width: NaN%` is not a rendering. An empty bar is. */
+      const actor = makeActor({
+        id: 'hollow',
+        stats: { maxHp: 0, maxMp: 0, attack: 1, defense: 1, speed: 1 },
+        hp: 0,
+        mp: 0,
+      });
+      const state: BattleState = {
+        ...createBattle(1, makeRoster()),
+        actors: [actor, makeBoss()],
+      };
+
+      const derived = model(state).actors[0]!;
+      expect(derived.hpFraction).toBe(0);
+      expect(derived.mpFraction).toBe(0);
+    });
+
+    it('flags a low bar at the threshold, not merely below it', () => {
+      /* Asserted AT the boundary as well as either side: `<` and `<=` differ
+         by exactly one HP value, and that is the kind of thing a rebalance
+         silently flips. */
+      expect(at(1500 * LOW_HP_FRACTION).isHpLow).toBe(true);
+      expect(at(1500 * LOW_HP_FRACTION - 1).isHpLow).toBe(true);
+      expect(at(1500 * LOW_HP_FRACTION + 1).isHpLow).toBe(false);
+      expect(at(1500).isHpLow).toBe(false);
+    });
+
+    it('flags a felled actor as low rather than leaving the bar healthy', () => {
+      expect(at(0).isHpLow).toBe(true);
+      expect(at(0).isDefeated).toBe(true);
+    });
   });
 
   it('refuses a roster with no enemy to put in the bar', () => {

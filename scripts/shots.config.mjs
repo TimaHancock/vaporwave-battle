@@ -61,6 +61,23 @@ export const SHOTS = [
     clip: { x: 0.56, y: 0.08, width: 0.36, height: 0.7 },
   },
   {
+    name: 'party_cards',
+    description:
+      'The bottom of the frame: four party cards, the command menu lifted ' +
+      'above them, and the party standing on the platform. The questions no ' +
+      'assertion can answer -- is each portrait cropped to a FACE rather ' +
+      'than a chestplate, does each tile read as the right character, does ' +
+      'the strip sit against the plum platform without muddying it, and are ' +
+      'the contact shadows still visible above its top edge?',
+    seed: 1337,
+    time: 1.0,
+    /* Twice the pixels at the same 16:9, so the composition is identical and
+       only the sampling improves -- the portraits are 3.4rem tiles and their
+       crop cannot be judged at 54 px. */
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0, y: 0.58, width: 1, height: 0.42 },
+  },
+  {
     name: 'bloom_off',
     description: 'Neon with bloom disabled -- baseline for the on/off diff.',
     seed: 1337,

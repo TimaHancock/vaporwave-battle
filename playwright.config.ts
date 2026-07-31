@@ -19,6 +19,32 @@ export default defineConfig({
   retries: process.env['CI'] ? 2 : 0,
   reporter: process.env['CI'] ? 'github' : 'list',
 
+  /*
+   * EVERY TEST HERE BOOTS A SOFTWARE-RENDERED WEBGL SCENE.
+   *
+   * Headless Chromium has no GPU, so three.js runs through SwiftShader.
+   * Measured on this scene at 1280x720: ~135-200ms per frame, about 5-7 fps,
+   * and hiding the entire HUD changes it by nothing -- the cost is the scene
+   * and its bloom pipeline being rasterised on the CPU.
+   *
+   * Two consequences, and the defaults are wrong for both:
+   *
+   *   timeout -- a test that plays a dozen turns at real sequencer timing
+   *   legitimately takes 20-30s. At the 30s default those tests sat on the
+   *   edge and fell off whenever the machine was busy, which reads as a UI
+   *   bug and is not one.
+   *
+   *   workers -- the default is derived from core count, but the contended
+   *   resource is CPU spent on software rasterisation, and every worker wants
+   *   all of it. Seven workers made each test 3x slower than running alone,
+   *   so the parallelism was buying nothing and costing reliability.
+   *
+   * If these ever need raising again, measure first: a scene that got slower
+   * is the more likely explanation than a suite that got bigger.
+   */
+  timeout: 60_000,
+  workers: process.env['CI'] ? 2 : 4,
+
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',

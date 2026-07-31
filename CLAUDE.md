@@ -146,14 +146,46 @@ The chain is `keydown` → `ui/menu.ts` (pure) → `Action` →
 with `publishDebugState` fed from the same view so the DOM and
 `__debugState.battle` can never describe different moments.
 
-The interface is **deliberately unstyled**. Turn order, party HP/MP and the
-round/chain/phase strip render bare, and no CSS was added for them. What was
-being answered was "does the loop work", not "does it look right".
+**Phase 5a complete: the party cards are styled.** Four cards along the
+bottom -- portrait, name, level, HP and MP gauges, status badges -- built from
+the tokens in `style.css`. The turn-order list and the round/chain/phase strip
+are still bare; they are the next two region passes.
+
+`renderHud` **builds its skeleton once and updates in place.** It used to
+`innerHTML = ''` and rebuild, which is why the boss bar's `transition: width
+400ms` never animated -- a new element has no previous width to transition
+from. Regions are created on first call and cached against the root in a
+`WeakMap`; only lists whose length varies with state (turn order, menu options)
+still rebuild their children. If you add a region, follow that shape or its
+bars will not animate either.
+
+Card facts worth knowing before changing them:
+
+- **Portraits are CSS crops of the sprite PNGs**, not separate art. The focus
+  numbers are in `src/ui/portraits.ts`, derived from measured alpha bounds --
+  the prep tool normalises feet-to-bottom but not head-to-top, so they cannot
+  be one shared rule. Re-prepped art silently invalidates them; the
+  `party_cards` shot is how you notice.
+- **`--card-strip` is not free to grow.** Party feet project to screen y 0.743
+  at 16:9, and a taller strip covers the contact shadows.
+- **Cyan marks the active card, magenta the idle ones.** Deliberately that way
+  round: the scene is magenta-dominant, so a magenta highlight vanishes into
+  it. Cyan is still only a rule plus its bloom, never a fill.
+- **`--card-scale-active` is bounded by the strip's gap.** The active card
+  grows by `transform`, so half the extra width crosses into its neighbour.
+  At 1280 the 16px gap leaves 8.5px of clearance; raising the scale without
+  raising the gap makes the cards overlap, and an e2e test says so.
+- **A status badge's glyph is a `::before`**, so it stays out of `textContent`
+  and `actor-<id>-statuses` still reads exactly `DEF_UP`.
+- The **boss's** `actor-apollyon*` testids live in a screen-reader-only strip.
+  They cannot go under the boss bar: the head-clearance test measures that
+  element's box and there is ~20px of headroom.
 
 Not done, and the obvious next steps:
 
-- **Styling.** The Phase 4 layout: party cards, a real turn-order bar, the
-  display typeface (still an open decision, to be made against real art).
+- **The remaining regions.** A real turn-order bar, then the command menu with
+  submenus and target selection. The display typeface is still an open
+  decision.
 - **The damage-number layer.** The seam is ready: a sprite's `name` is its
   `ActorId`, so a `damage` event's `targetId` resolves to a sprite and
   `headScreenPosition()` gives the anchor.
@@ -162,5 +194,5 @@ Not done, and the obvious next steps:
   single commit. Splitting it needs a new entry point in `battle.ts`.
 - **Sprite reactions.** Nothing on the canvas moves when an actor is hit.
 
-Use plan mode before: the damage-number/animation layer and the Phase 4
-styling pass.
+Use plan mode before: the damage-number/animation layer and the remaining
+Phase 5 region passes.
