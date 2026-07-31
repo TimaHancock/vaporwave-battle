@@ -14,6 +14,11 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  /* dist.spec.ts belongs to playwright.dist.config.ts, which serves the BUILT
+     output. Run against the dev server it would assert nothing -- the bug it
+     exists to catch is invisible there -- and it would pass, which is worse
+     than not running it. */
+  testIgnore: 'dist.spec.ts',
   fullyParallel: true,
   forbidOnly: Boolean(process.env['CI']),
   retries: process.env['CI'] ? 2 : 0,

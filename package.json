@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
+    "e2e:dist": "playwright test -c playwright.dist.config.ts",
     "shots": "node scripts/shoot.mjs",
     "verify": "npm run typecheck && npm run test && npm run build"
   },

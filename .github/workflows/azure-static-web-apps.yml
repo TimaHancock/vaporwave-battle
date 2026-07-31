@@ -72,6 +72,18 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The gate the portraits needed and did not have.
+      #
+      # Every step above this one runs against the DEV SERVER, where Vite
+      # injects the stylesheet into the document. That hides a whole class of
+      # bug: anything whose behaviour depends on assets being bundled into
+      # /assets/ and served as real files. The HUD portraits shipped blank to
+      # production with all of the gates above green.
+      #
+      # No continue-on-error. This is a gate, not evidence.
+      - name: Built-output smoke test
+        run: npm run e2e:dist
+
       # Screenshots are captured as a build artifact rather than asserted
       # on. Visual judgement stays human (or model) work -- but having the
       # PNGs attached to every run means you can diff a regression after

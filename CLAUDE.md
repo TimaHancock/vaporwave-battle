@@ -49,21 +49,37 @@ characters, DOM interface. One arena, one boss, one locked camera.
 | battle logic | `npm run test` |
 | UI / DOM | `npm run e2e` |
 | anything visual | `npm run shots`, then read the PNGs |
+| asset paths, or anything build-shaped | `npm run build && npm run e2e:dist` |
 | before committing | `npm run verify` |
 
-`npm run dev` must be running for `shots`. `e2e` starts its own server.
+`npm run dev` must be running for `shots`. `e2e` and `e2e:dist` start their
+own servers — but `e2e:dist` serves `dist/`, so build first or it tests the
+previous build.
 
 ## Verification
 
-Three channels, each with one job:
+Four channels, each with one job:
 
 - `npm run test` — Vitest, pure logic. Fast. Most bugs live here.
 - `npm run e2e` — Playwright DOM assertions. Exact UI state.
 - `npm run shots` — screenshots + `shots/*.json` state dumps. Visual only.
+- `npm run e2e:dist` — the **built output**, via `vite preview`. Run in CI
+  between build and deploy.
 
 `shots/<name>.json` reports draw calls, triangles and GPU allocations
 alongside each PNG. If a PNG is black but draw calls are non-zero, the
 problem is lighting or camera, not loading.
+
+**The first three all run against the dev server, and that is a structural
+blind spot, not an oversight.** Vite injects the stylesheet as a `<style>`
+element inside the document in dev, and bundles it to a real file at
+`/assets/index-*.css` in the build — so anything whose behaviour depends on
+how a path resolves, or on minification and tree-shaking, is invisible to
+them. The HUD portraits shipped blank to Azure with all three green.
+`e2e:dist` exists for exactly that gap and should stay small: anything
+assertable against the dev server belongs in `e2e/hud.spec.ts`, where it is
+faster to run and easier to debug. A test that would pass in dev is not
+earning its place in `dist.spec.ts`.
 
 ### URL parameters
 
@@ -91,6 +107,21 @@ on a legitimately unlocked battle.
 - **Rectangular halo around a sprite** means the source PNG has
   near-zero-but-not-zero alpha across its background. Raise `alphaTest`
   toward 0.5. If fine detail is being eaten instead, lower it.
+- **Never put a relative `url()` inside a CSS custom property.** A `url()`
+  that reaches CSS through `var()` has two candidate bases -- the document,
+  and the stylesheet the `var()` is *used* in -- and browsers disagree about
+  which wins. Chromium picks the stylesheet. In dev both are the document, so
+  it looks fine; in the build `./characters/kira.png` becomes
+  `/assets/characters/kira.png` and every portrait goes blank. Resolve with
+  `new URL(path, document.baseURI).href` before writing the property, which
+  is the base `THREE.TextureLoader` already uses for the same string.
+  `applyPortrait` in `src/ui/hud.ts` is the one place this happens.
+- **A missing asset can arrive as a cheerful 200.** A host with a navigation
+  fallback -- `vite preview`, and Azure for any path not covered by the
+  `exclude` list in `staticwebapp.config.json` -- answers a bad path with
+  `index.html`. An `<img>` or a `background-image` pointed at HTML fails
+  exactly like a 404, silently. Assert `content-type`, not just status;
+  `e2e/dist.spec.ts` does, and a status-only check would have shipped this.
 - **A 1:1 sprite size** in `__debugState.sprites` means the texture had not
   decoded when the sprite was built. Await the loader first.
 - **Grounding:** every sprite gets a contact shadow, or flat art reads as

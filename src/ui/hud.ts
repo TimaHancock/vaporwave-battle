@@ -653,7 +653,33 @@ function applyPortrait(el: HTMLElement, actorId: string): void {
   const art = portraitFor(actorId);
   if (art.url === null) return;
 
-  el.style.setProperty('--portrait-src', `url("${art.url}")`);
+  /*
+   * ABSOLUTE, RESOLVED AGAINST THE DOCUMENT. Never put a relative url()
+   * inside a custom property.
+   *
+   * A url() that reaches CSS by var() substitution has two candidate bases --
+   * the document, and the stylesheet the var() is USED in -- and browsers do
+   * not agree on which wins. Chromium picks the stylesheet, and that is
+   * invisible in dev: Vite injects the CSS as a <style> element inside the
+   * document, so both bases are the same thing. In the build the stylesheet
+   * is a real file at /assets/index-*.css, and "./characters/kira.png"
+   * resolves to /assets/characters/kira.png. Every portrait in the HUD
+   * shipped blank to Azure on that difference while all three local channels
+   * stayed green.
+   *
+   * document.baseURI is the same base THREE.TextureLoader uses for this
+   * identical string, so the two consumers of CastMember.textureUrl now
+   * provably agree -- which was the invariant that broke. It also keeps
+   * vite.config.ts's `base: './'` honest: a subpath deployment or a dist/
+   * opened off the filesystem resolves correctly, which a root-absolute
+   * "/characters/..." would not.
+   *
+   * e2e/dist.spec.ts is the assertion. It cannot live in the dev-server
+   * suite; there is nothing there to catch.
+   */
+  const src = new URL(art.url, document.baseURI).href;
+
+  el.style.setProperty('--portrait-src', `url("${src}")`);
   el.style.setProperty('--portrait-zoom', String(art.zoom));
   el.style.setProperty('--portrait-x', art.x);
   el.style.setProperty('--portrait-y', art.y);

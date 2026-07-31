@@ -31,7 +31,17 @@ export interface CastMember {
   /** ActorId, sprite name, and the stem of the texture filename. */
   name: string;
   side: Side;
-  /** Served from the web root -- public/ is copied there by Vite. */
+  /**
+   * Served from the web root -- public/ is copied there by Vite.
+   *
+   * RELATIVE, and it has two consumers that must resolve it against the same
+   * base: loadCharacterTexture hands it to THREE.TextureLoader, and
+   * ui/portraits.ts hands it to the HUD's portrait crops. The texture loader
+   * always resolves against the document; applyPortrait in ui/hud.ts has to
+   * be told to, because CSS would otherwise resolve it against the bundled
+   * stylesheet and land a directory too deep. See the comment there before
+   * changing the shape of these strings.
+   */
   textureUrl: string;
   /** Visible height in world units. Mirrors CHARACTER_PROMPTS.md. */
   characterHeight: number;
