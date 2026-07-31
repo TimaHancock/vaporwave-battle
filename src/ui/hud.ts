@@ -32,7 +32,14 @@
  */
 
 import { previewUpcoming } from '../battle/turnOrder';
-import { isDefeated, type BattleState, type Status } from '../battle/types';
+import {
+  findActor,
+  isDefeated,
+  type Actor,
+  type BattleState,
+  type Side,
+  type Status,
+} from '../battle/types';
 import { menuOptions, menuTitle, type MenuOption, type MenuState } from './menu';
 import { portraitFor } from './portraits';
 
@@ -78,8 +85,15 @@ export interface HudActor {
 export interface HudModel {
   boss: { id: string; name: string; level: number; hp: number; maxHp: number };
   actors: readonly HudActor[];
-  /** Upcoming turns, current actor first. */
-  turnOrder: readonly { id: string; name: string }[];
+  /**
+   * Upcoming turns, current actor first.
+   *
+   * THE CURRENT TURN IS INDEX 0, NOT "whichever entry matches activeActorId".
+   * The preview runs past the end of the round into the next one, so a fast
+   * actor legitimately appears twice -- a 4+1 roster returns
+   * [kira, neo, vex, lyra, apollyon, kira]. Marking by id lights two tiles.
+   */
+  turnOrder: readonly { id: string; name: string; side: Side }[];
   round: number;
   chain: number;
   phase: BattleState['phase'];
@@ -112,8 +126,6 @@ export function toHudModel(
     );
   }
 
-  const nameOf = (id: string): string =>
-    state.actors.find((actor) => actor.id === id)?.name ?? id;
 
   return {
     boss: {
@@ -142,12 +154,20 @@ export function toHudModel(
         statuses: actor.statuses,
       };
     }),
+    /* DEFEATED ACTORS ARE DROPPED, and the bar shortens rather than padding.
+       `advance` walks past a fallen actor when it picks the next turn, but
+       previewUpcoming slices the round's queue raw -- the queue is built once
+       per round and never edited, which is what makes a mid-round speed
+       change safe. So a party member who falls stays in the raw preview for
+       the rest of the round, advertising a turn that will not happen.
+       Filtering here rather than there: which turns are worth SHOWING is a UI
+       question, and turnOrder.ts is deliberately not a UI module. */
     turnOrder:
       state.phase === 'in_progress'
-        ? previewUpcoming(state, TURN_PREVIEW_LENGTH).map((id) => ({
-            id,
-            name: nameOf(id),
-          }))
+        ? previewUpcoming(state, TURN_PREVIEW_LENGTH)
+            .map((id) => findActor(state, id))
+            .filter((actor): actor is Actor => actor !== undefined && !isDefeated(actor))
+            .map((actor) => ({ id: actor.id, name: actor.name, side: actor.side }))
         : [],
     round: state.round,
     chain: state.chain,
@@ -308,27 +328,87 @@ function buildBossBar(model: HudModel): Region {
 /* Turn order                                                          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The turn-order bar: portraits, left to right, next up first.
+ *
+ * Deliberately just faces. A row of portraits is read at a glance where a
+ * numbered list of names has to be parsed, and the bar's whole job is to be
+ * glanced at. It wears the same selection cues as the party cards -- cyan
+ * rule, cyan glow, larger -- because "whose turn is it" is one question and
+ * should not have two visual languages.
+ *
+ * Slots are a REUSED POOL rather than a rebuild. The pool grows and shrinks
+ * with the queue, so `turn-order-slot-<n>` is a stable element per position:
+ * the bar stops churning on every narration beat, and the tiles can
+ * transition. What moves between beats is which portrait is in which slot.
+ */
 function buildTurnOrder(): Region {
   const el = document.createElement('ol');
+  el.className = 'hud-turn-order';
   el.dataset['testid'] = 'turn-order';
   el.setAttribute('aria-label', 'Turn order');
+
+  const pool: TurnSlot[] = [];
 
   return {
     el,
     update(next: HudModel): void {
-      /* Rebuilt wholesale: the preview shortens as the battle ends and
-         empties entirely on victory, so there is no stable set of slots to
-         reconcile against. Nothing here animates. */
-      el.replaceChildren();
-      next.turnOrder.forEach((entry, index) => {
-        const slot = document.createElement('li');
-        slot.dataset['testid'] = `turn-order-slot-${index}`;
-        /* The id as well as the name: the name is for a human reading the
-           screen, the id is what a test can join against an ActorId. */
-        slot.dataset['actor'] = entry.id;
-        slot.textContent = entry.name;
-        el.append(slot);
+      const entries = next.turnOrder;
+
+      while (pool.length < entries.length) {
+        pool.push(buildTurnSlot(pool.length));
+      }
+      /* Detached rather than hidden. An empty tile still reads as a turn, and
+         the queue really is empty once the battle has ended. */
+      for (let i = entries.length; i < pool.length; i++) {
+        pool[i]!.el.remove();
+      }
+
+      entries.forEach((entry, index) => {
+        const slot = pool[index]!;
+        /* Index 0 is the current turn -- see HudModel.turnOrder for why this
+           cannot be a match against activeActorId. */
+        slot.update(entry, index === 0);
+        if (slot.el.parentNode === null) el.append(slot.el);
       });
+    },
+  };
+}
+
+interface TurnSlot {
+  el: HTMLElement;
+  update(entry: HudModel['turnOrder'][number], isCurrent: boolean): void;
+}
+
+function buildTurnSlot(index: number): TurnSlot {
+  const el = document.createElement('li');
+  el.className = 'hud-turn';
+  el.dataset['testid'] = `turn-order-slot-${index}`;
+
+  const portrait = document.createElement('span');
+  portrait.className = 'hud-turn__portrait';
+
+  /* The name stays in the DOM, off-screen. It keeps the tile's accessible
+     name, keeps the <ol> readable as a list of characters rather than a list
+     of blanks, and keeps each item's textContent equal to the character name
+     -- which is what the id/name pair in the old bare row was for. */
+  const name = document.createElement('span');
+  name.className = 'hud-sr-only';
+
+  el.append(portrait, name);
+
+  return {
+    el,
+    update(entry, isCurrent): void {
+      if (el.dataset['actor'] !== entry.id) {
+        /* The id is what a test joins against an ActorId; the side answers
+           "is the boss up next" without anyone parsing a portrait. */
+        el.dataset['actor'] = entry.id;
+        el.dataset['side'] = entry.side;
+        setText(name, entry.name);
+        applyPortrait(portrait, entry.id);
+      }
+      toggleAttr(el, 'data-current', isCurrent);
     },
   };
 }
@@ -432,20 +512,27 @@ function buildPortrait(actor: HudActor): HTMLElement {
   el.dataset['testid'] = `actor-${actor.id}-portrait`;
   el.setAttribute('role', 'img');
   el.setAttribute('aria-label', `${actor.name} portrait`);
-
-  /* A crop of the character's own sprite PNG -- see ui/portraits.ts for why
-     each one needs its own numbers. Set as custom properties rather than as
-     background shorthand so the stylesheet still owns how a portrait is
-     composed and this only says which pixels. */
-  const art = portraitFor(actor.id);
-  if (art.url !== null) {
-    el.style.setProperty('--portrait-src', `url("${art.url}")`);
-    el.style.setProperty('--portrait-zoom', String(art.zoom));
-    el.style.setProperty('--portrait-x', art.x);
-    el.style.setProperty('--portrait-y', art.y);
-  }
+  applyPortrait(el, actor.id);
 
   return el;
+}
+
+/**
+ * Point an element at a character's portrait crop.
+ *
+ * Custom properties rather than the background shorthand, so the stylesheet
+ * still owns how a portrait is composed and this only says which pixels. Used
+ * by both the party cards and the turn-order tiles -- one crop table, two
+ * sizes, and ui/portraits.ts stays the single source for the numbers.
+ */
+function applyPortrait(el: HTMLElement, actorId: string): void {
+  const art = portraitFor(actorId);
+  if (art.url === null) return;
+
+  el.style.setProperty('--portrait-src', `url("${art.url}")`);
+  el.style.setProperty('--portrait-zoom', String(art.zoom));
+  el.style.setProperty('--portrait-x', art.x);
+  el.style.setProperty('--portrait-y', art.y);
 }
 
 interface CardGauge {

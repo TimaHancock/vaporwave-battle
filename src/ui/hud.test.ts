@@ -85,8 +85,51 @@ describe('toHudModel', () => {
     ]);
   });
 
-  it('resolves turn-order names as well as ids', () => {
-    expect(model().turnOrder[0]).toEqual({ id: 'kira', name: 'KIRA' });
+  it('resolves turn-order names and sides as well as ids', () => {
+    expect(model().turnOrder[0]).toEqual({
+      id: 'kira',
+      name: 'KIRA',
+      side: 'party',
+    });
+    /* The side is what lets the bar answer "is the boss up next" without
+       anything downstream having to recognise a portrait. */
+    expect(model().turnOrder[4]).toEqual({
+      id: 'apollyon',
+      name: 'APOLLYON',
+      side: 'enemy',
+    });
+  });
+
+  it('repeats a fast actor when the preview runs into the next round', () => {
+    /* The trap the turn-order bar has to survive: the preview is six long and
+       the round is five, so KIRA legitimately appears at both ends. Anything
+       marking "the current turn" by matching activeActorId would light both.
+       The current turn is index 0, positionally. */
+    const turnOrder = model().turnOrder;
+
+    expect(turnOrder[0]?.id).toBe('kira');
+    expect(turnOrder[5]?.id).toBe('kira');
+    expect(turnOrder.filter((entry) => entry.id === 'kira')).toHaveLength(2);
+    expect(turnOrder[0]?.id).toBe(model().activeActorId);
+  });
+
+  it('drops a defeated actor rather than forecasting a turn that is skipped', () => {
+    /* advance() walks past a fallen actor when it picks the next turn, but
+       previewUpcoming slices the round's queue raw -- the queue is built once
+       per round and never edited. So without this filter VEX would sit in the
+       bar for the rest of the round advertising a turn she will not take. */
+    const base = createBattle(1, makeRoster());
+    const felled: BattleState = {
+      ...base,
+      actors: base.actors.map((a) => (a.id === 'vex' ? { ...a, hp: 0 } : a)),
+    };
+
+    const ids = model(felled).turnOrder.map((entry) => entry.id);
+
+    expect(ids).not.toContain('vex');
+    /* And the bar SHORTENS rather than padding itself back to six. A short
+       bar is honest about a thinned party. */
+    expect(ids).toEqual(['kira', 'neo', 'lyra', 'apollyon', 'kira']);
   });
 
   it('empties the turn order once the battle has ended', () => {

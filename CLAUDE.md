@@ -146,10 +146,11 @@ The chain is `keydown` → `ui/menu.ts` (pure) → `Action` →
 with `publishDebugState` fed from the same view so the DOM and
 `__debugState.battle` can never describe different moments.
 
-**Phase 5a complete: the party cards are styled.** Four cards along the
-bottom -- portrait, name, level, HP and MP gauges, status badges -- built from
-the tokens in `style.css`. The turn-order list and the round/chain/phase strip
-are still bare; they are the next two region passes.
+**Phase 5a/5b complete: the party cards and the turn-order bar are styled.**
+Four cards along the bottom -- portrait, name, level, HP and MP gauges, status
+badges -- and a row of portrait tiles top-left for the turn order, both built
+from the tokens in `style.css`. The command menu and the round/chain/phase
+strip are still bare; they are the next region passes.
 
 `renderHud` **builds its skeleton once and updates in place.** It used to
 `innerHTML = ''` and rebuild, which is why the boss bar's `transition: width
@@ -171,6 +172,15 @@ Card facts worth knowing before changing them:
 - **Cyan marks the active card, magenta the idle ones.** Deliberately that way
   round: the scene is magenta-dominant, so a magenta highlight vanishes into
   it. Cyan is still only a rule plus its bloom, never a fill.
+- **The cards and the turn tiles SHARE their state rules**, via grouped
+  selectors (`.hud-card, .hud-turn`). One question, one visual language --
+  splitting them apart is how the two regions drift.
+- **The current turn is `turnOrder[0]`, positionally.** The preview runs into
+  the next round, so a fast actor appears twice; marking by `activeActorId`
+  lights two tiles. Tested in both Vitest and Playwright.
+- **A HUD shot wants `scale`, not a bigger `viewport`.** The DOM is sized in
+  rem, so enlarging the frame renders the same tile into more pixels of frame
+  and makes it *smaller*. `viewport` is for scene shots like `boss_closeup`.
 - **`--card-scale-active` is bounded by the strip's gap.** The active card
   grows by `transform`, so half the extra width crosses into its neighbour.
   At 1280 the 16px gap leaves 8.5px of clearance; raising the scale without

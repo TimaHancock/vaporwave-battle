@@ -40,11 +40,24 @@ async function main() {
 
   const browser = await chromium.launch();
 
-  const newContext = (viewport) =>
+  /*
+   * `scale` is deviceScaleFactor, and it is the right knob for anything whose
+   * subject is the HUD.
+   *
+   * Enlarging the VIEWPORT does not enlarge the interface: the DOM is sized in
+   * rem, so a 2x viewport renders the same 36px tile into twice as much frame
+   * and makes it relatively smaller. It is the correct knob for a shot whose
+   * subject is the SCENE -- boss_closeup wants more samples along a silhouette
+   * -- and the wrong one for a shot of a card or a portrait tile.
+   *
+   * deviceScaleFactor keeps the layout identical, at the size a player
+   * actually sees, and renders those same CSS pixels at higher resolution.
+   */
+  const newContext = (viewport, scale) =>
     browser.newContext({
       viewport: viewport ?? VIEWPORT,
-      // Pin DPR so screenshot dimensions are identical on every machine.
-      deviceScaleFactor: 1,
+      // Pinned unless a shot asks, so dimensions are identical on every machine.
+      deviceScaleFactor: scale ?? 1,
       // Ambient CSS transitions would otherwise race the capture.
       reducedMotion: 'reduce',
     });
@@ -57,7 +70,10 @@ async function main() {
        on the silhouette edge. Keep the ASPECT the same as VIEWPORT when you
        do: the camera's fov is vertical, so a different aspect is a different
        composition, and the shot stops being comparable with the others. */
-    const shotContext = shot.viewport ? await newContext(shot.viewport) : context;
+    const shotContext =
+      shot.viewport || shot.scale
+        ? await newContext(shot.viewport, shot.scale)
+        : context;
     const page = await shotContext.newPage();
 
     // Surface browser-side errors. A silent exception in the scene is the

@@ -102,6 +102,13 @@
      At 1280 the gap is 16px and this leaves 8.5px of clearance --
      e2e/hud.spec.ts asserts the cards never overlap. */
   --card-scale-active: 1.05;
+
+  /* The turn-order tile's active scale. Larger than --card-scale-active
+     because the CUE has to survive the size difference, not the ratio:
+     5% of a 300px card is 15px and reads; 5% of a 36px tile is under 2px
+     and does not. At 36px this is +5.4px, 2.7px per side, inside the
+     --gap-sm the row is spaced with. */
+  --turn-scale-active: 1.15;
 }
 
 * {
@@ -277,29 +284,71 @@ body {
   gap: var(--gap-md);
 }
 
-.hud-card {
-  flex: 1 1 0;
-  /* Capped so four cards on a wide screen stay card-shaped instead of
-     stretching into banners. 19rem is chosen against the canonical 16:9: four
-     of them plus the gaps just fill 1280 minus the HUD padding, so the strip
-     lines up with the command menu's left edge instead of floating 68px
-     inside it. */
-  max-width: 19rem;
-  min-width: 0;
+/* ---------- Turn order ---------- */
+
+/*
+ * Portraits only, next up first. A row of faces is read at a glance where the
+ * numbered list of names this replaced had to be parsed -- and being glanced
+ * at is the bar's entire job.
+ *
+ * Stays in NORMAL FLOW. It is the first in-flow child of #hud, so the
+ * round/chain/phase strip continues to sit directly beneath it and no other
+ * region has to be repositioned. Dropping the list padding is what removes
+ * the browser's "1." markers.
+ */
+.hud-turn-order {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
+  /* Shrink to the tiles. A block-level flex row would stretch the full width
+     of the HUD -- an invisible box reaching under the boss bar, which is both
+     untrue about what the bar occupies and something a future hover or
+     pointer-events change would trip over. */
+  width: fit-content;
   gap: var(--gap-sm);
-  padding: var(--gap-sm);
+  margin: 0 0 var(--gap-sm);
+  padding: 0;
+  list-style: none;
+}
+
+.hud-turn {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+}
+
+.hud-turn[data-current] {
+  transform: scale(var(--turn-scale-active));
+}
+
+.hud-turn__portrait {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Shared panel state ---------- */
+
+/*
+ * ONE DEFINITION OF "IDLE" AND ONE OF "ACTIVE", worn by both the party cards
+ * and the turn-order tiles.
+ *
+ * The two regions answer the same question -- whose turn is it -- so they must
+ * not drift into two visual languages for it. Grouping the selectors rather
+ * than copying the declarations means retuning the glow moves both at once.
+ * Layout stays with each region; only state lives here.
+ */
+
+.hud-card,
+.hud-turn {
   border: var(--card-border) solid var(--card-edge-idle);
   background-color: var(--card-surface-idle);
-  backdrop-filter: blur(2px);
-  /* A faint magenta bloom so an idle card still reads as neon rather than as
-     a flat panel -- it is recessive, not absent. */
+  /* A faint magenta bloom so an idle panel still reads as neon rather than as
+     a flat box -- recessive, not absent. */
   box-shadow: 0 0 10px color-mix(in srgb, var(--horizon) 20%, transparent);
-  /* Grows upward from the strip's baseline, never down off the frame. */
+  /* Grows from the baseline, never down off the frame. */
   transform: scale(1);
   transform-origin: bottom center;
-  /* ease-in-out, and the same curve on both cards: the outgoing card shrinks
+  /* ease-in-out, and the same curve on both panels: the outgoing one shrinks
      and dims as the incoming one grows and lights, over one duration, so the
      highlight reads as MOVING between them rather than teleporting.
      opacity keeps its own timing -- the defeated fade is a different event
@@ -313,22 +362,60 @@ body {
 
 /* Whose turn it is: a cyan rule, a cyan glow, the lighter surface, and a
    little more size. Four signals rather than one, because a single one of
-   them was not enough to find the card at a glance.
+   them was not enough to find at a glance.
 
    Deliberately NO `will-change: transform`. Forcing a permanent compositor
    layer would leave the 0.6rem HP numbers rasterised at 1.0 and scaled up --
    permanently soft. Without it the text is only soft during the handover and
    crisp at rest. */
-.hud-card[aria-current='true'] {
+.hud-card[aria-current='true'],
+.hud-turn[data-current] {
   border-color: var(--card-edge-active);
   background-color: var(--card-surface-active);
   box-shadow: 0 0 24px color-mix(in srgb, var(--signal) 45%, transparent),
     0 0 8px color-mix(in srgb, var(--signal) 60%, transparent),
     inset 0 0 16px color-mix(in srgb, var(--signal) 10%, transparent);
-  transform: scale(var(--card-scale-active));
   /* Flex items honour z-index without position. Without this the glow is
-     drawn under the neighbouring cards and clipped into a hard edge. */
+     drawn under the neighbouring panels and clipped into a hard edge. */
   z-index: 1;
+}
+
+/* One definition of a portrait crop, at two sizes. See src/ui/portraits.ts
+   for where the focus numbers come from. */
+.hud-card__portrait,
+.hud-turn__portrait {
+  /* Plum behind the art, not transparency: the source PNGs are cutouts, so
+     without this a portrait is a hole showing the battle through it. */
+  background-color: var(--plum);
+  background-image: var(--portrait-src, none);
+  /* Height-relative zoom -- Lyra's frame is 640 wide where the rest are 512,
+     and a width-relative zoom would need her to be a special case. */
+  background-size: auto calc(var(--portrait-zoom, 1) * 100%);
+  background-position: var(--portrait-x, 50%) var(--portrait-y, 50%);
+  background-repeat: no-repeat;
+}
+
+.hud-card {
+  flex: 1 1 0;
+  /* Capped so four cards on a wide screen stay card-shaped instead of
+     stretching into banners. 19rem is chosen against the canonical 16:9: four
+     of them plus the gaps just fill 1280 minus the HUD padding, so the strip
+     lines up with the command menu's left edge instead of floating 68px
+     inside it. */
+  max-width: 19rem;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm);
+  /* Cards only, not the turn tiles: a tile is fully covered by its portrait,
+     so blurring the backdrop behind it buys nothing and costs a compositor
+     layer each. */
+  backdrop-filter: blur(2px);
+}
+
+.hud-card[aria-current='true'] {
+  transform: scale(var(--card-scale-active));
 }
 
 .hud-card[data-defeated] {
@@ -341,16 +428,6 @@ body {
   width: 3.4rem;
   height: 3.4rem;
   border: var(--edge);
-  /* Plum behind the art, not transparency: the source PNGs are cutouts, so
-     without this a portrait is a hole showing the battle through it. */
-  background-color: var(--plum);
-  background-image: var(--portrait-src, none);
-  /* Height-relative zoom -- Lyra's frame is 640 wide where the rest are 512,
-     and a width-relative zoom would need her to be a special case. See
-     src/ui/portraits.ts for where these numbers come from. */
-  background-size: auto calc(var(--portrait-zoom, 1) * 100%);
-  background-position: var(--portrait-x, 50%) var(--portrait-y, 50%);
-  background-repeat: no-repeat;
 }
 
 .hud-card__body {
@@ -508,7 +585,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .hud-boss__fill,
   .hud-card__fill,
-  .hud-card {
+  .hud-card,
+  .hud-turn {
     transition: none;
   }
 }

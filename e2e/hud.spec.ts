@@ -48,13 +48,21 @@ function luminance(colour: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-function cardStyle(page: Page, id: string, property: string) {
+function computed(page: Page, testid: string, property: string) {
   return page
-    .getByTestId(`party-card-${id}`)
+    .getByTestId(testid)
     .evaluate(
       (el, prop) => getComputedStyle(el).getPropertyValue(prop),
       property,
     );
+}
+
+function cardStyle(page: Page, id: string, property: string) {
+  return computed(page, `party-card-${id}`, property);
+}
+
+function slotStyle(page: Page, index: number, property: string) {
+  return computed(page, `turn-order-slot-${index}`, property);
 }
 
 async function cardWidth(page: Page, id: string): Promise<number> {
@@ -228,6 +236,142 @@ test.describe('the active card stands out', () => {
        selector, so these coming apart means one of them stopped being. */
     expect(await cardWidth(page, 'neo')).toBeGreaterThan(
       await cardWidth(page, 'kira'),
+    );
+  });
+});
+
+/**
+ * The turn-order bar: portraits only, next up first.
+ *
+ * It shares its selection cues with the party cards by sharing their CSS
+ * rules, so these tests assert the cues on the BAR independently -- if someone
+ * splits the grouped selectors apart later, the cards would still pass their
+ * own tests while the bar quietly went plain.
+ */
+test.describe('the turn-order bar', () => {
+  /** The opening preview: one round of five, then it wraps back to KIRA. */
+  const OPENING = ['kira', 'neo', 'vex', 'lyra', 'apollyon', 'kira'] as const;
+
+  test('shows a portrait per upcoming turn, in order', async ({ page }) => {
+    await ready(page);
+
+    const bar = page.getByTestId('turn-order');
+    await expect(bar.locator('li')).toHaveCount(OPENING.length);
+
+    for (const [index, id] of OPENING.entries()) {
+      const slot = page.getByTestId(`turn-order-slot-${index}`);
+      await expect(slot).toHaveAttribute('data-actor', id);
+
+      /* Each tile carries that actor's own art. A single shared or stale
+         portrait would still pass a count assertion. */
+      const image = await slot
+        .locator('.hud-turn__portrait')
+        .evaluate((el) => getComputedStyle(el).backgroundImage);
+      expect(image, `slot ${index} portrait`).toContain(`${id}.png`);
+    }
+  });
+
+  test('keeps the character name readable to a screen reader', async ({ page }) => {
+    await ready(page);
+
+    /* The names are off-screen, not deleted -- otherwise the list announces
+       as six blank items. */
+    await expect(page.getByTestId('turn-order-slot-0')).toHaveText('KIRA');
+    await expect(page.getByTestId('turn-order')).toHaveAttribute(
+      'aria-label',
+      'Turn order',
+    );
+  });
+
+  test('marks the current turn once, even though KIRA appears twice', async ({
+    page,
+  }) => {
+    await ready(page);
+
+    /* THE TRAP THIS BAR HAS TO SURVIVE. The preview is six long and the round
+       is five, so KIRA is at both index 0 and index 5. Marking the current
+       turn by matching activeActorId lights both tiles. */
+    await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
+      'data-actor',
+      'kira',
+    );
+    await expect(page.getByTestId('turn-order-slot-5')).toHaveAttribute(
+      'data-actor',
+      'kira',
+    );
+
+    const current = page.locator('[data-testid^="turn-order-slot-"][data-current]');
+    await expect(current).toHaveCount(1);
+    await expect(current).toHaveAttribute('data-testid', 'turn-order-slot-0');
+  });
+
+  test('wears the same cyan-on-magenta cue as the party cards', async ({ page }) => {
+    await ready(page);
+
+    const leading = channels(await slotStyle(page, 0, 'border-top-color'));
+    const waiting = channels(await slotStyle(page, 1, 'border-top-color'));
+
+    expect(leading.b, 'leading tile is cyan-dominant').toBeGreaterThan(leading.r);
+    expect(waiting.r, 'waiting tile is magenta-dominant').toBeGreaterThan(
+      waiting.b,
+    );
+
+    /* And it is the SAME cyan the active card uses, not a second one that
+       happens to also be blue. */
+    expect(await slotStyle(page, 0, 'border-top-color')).toBe(
+      await cardStyle(page, 'kira', 'border-top-color'),
+    );
+  });
+
+  test('the leading tile is drawn larger, and the queue advances', async ({
+    page,
+  }) => {
+    await ready(page);
+
+    const leadingBox = (await page.getByTestId('turn-order-slot-0').boundingBox())!;
+    const waitingBox = (await page.getByTestId('turn-order-slot-1').boundingBox())!;
+    expect(leadingBox.width / waitingBox.width).toBeGreaterThan(1.05);
+
+    await page.keyboard.press('Enter');
+    await idle(page);
+
+    /* The whole queue shifts left by one; the tile that is lit stays slot 0. */
+    await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
+      'data-actor',
+      'neo',
+    );
+    await expect(
+      page.locator('[data-testid^="turn-order-slot-"][data-current]'),
+    ).toHaveCount(1);
+    await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
+      'data-current',
+      'true',
+    );
+  });
+
+  test('records which side each turn belongs to', async ({ page }) => {
+    await ready(page);
+
+    /* "Is the boss up next" is the question the bar exists to answer, and a
+       test should be able to ask it without recognising a portrait. */
+    await expect(page.getByTestId('turn-order-slot-4')).toHaveAttribute(
+      'data-side',
+      'enemy',
+    );
+    await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
+      'data-side',
+      'party',
+    );
+  });
+
+  test('does not collide with the boss bar', async ({ page }) => {
+    await ready(page);
+
+    const bar = (await page.getByTestId('turn-order').boundingBox())!;
+    const boss = (await page.getByTestId('boss-bar').boundingBox())!;
+
+    expect(bar.x + bar.width, 'turn order right edge vs boss bar').toBeLessThan(
+      boss.x,
     );
   });
 });

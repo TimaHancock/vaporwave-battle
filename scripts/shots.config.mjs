@@ -61,6 +61,23 @@ export const SHOTS = [
     clip: { x: 0.56, y: 0.08, width: 0.36, height: 0.7 },
   },
   {
+    name: 'turn_order',
+    description:
+      'The turn-order bar in the top-left: six portrait tiles, next up ' +
+      'first, the leading one wearing the same cyan rule and glow as the ' +
+      'active party card. The questions no assertion can answer -- is each ' +
+      'face identifiable at 36px, does the leading tile read as "up now", ' +
+      'and does a row of small bright squares compete with the boss bar?',
+    seed: 1337,
+    time: 1.0,
+    /* scale, NOT a bigger viewport. The tiles are sized in rem, so a 2x
+       viewport would render the same 36px tile into twice as much frame and
+       make it relatively smaller. This keeps the layout at the size a player
+       sees and renders those pixels at 2x. */
+    scale: 2,
+    clip: { x: 0, y: 0, width: 0.34, height: 0.16 },
+  },
+  {
     name: 'party_cards',
     description:
       'The bottom of the frame: four party cards, the command menu lifted ' +
@@ -71,10 +88,10 @@ export const SHOTS = [
       'the contact shadows still visible above its top edge?',
     seed: 1337,
     time: 1.0,
-    /* Twice the pixels at the same 16:9, so the composition is identical and
-       only the sampling improves -- the portraits are 3.4rem tiles and their
-       crop cannot be judged at 54 px. */
-    viewport: { width: 2560, height: 1440 },
+    /* scale rather than a bigger viewport, for the same reason as turn_order:
+       the cards are sized in rem, so enlarging the frame shrinks them within
+       it. This is the strip at the size a player sees, at 2x resolution. */
+    scale: 2,
     clip: { x: 0, y: 0.58, width: 1, height: 0.42 },
   },
   {
