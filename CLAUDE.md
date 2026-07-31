@@ -39,7 +39,13 @@ characters, DOM interface. One arena, one boss, one locked camera.
 - **Every GPU resource goes in the `DisposalRegistry`.** Geometries,
   materials and textures leak otherwise, and this game restarts battles.
 - **`data-testid` attributes are a contract** with the test suite. Renaming
-  one is a breaking change.
+  one is a breaking change. A float's testid says what it IS —
+  `damage-number`, `heal-number`, `status-popup` — and they share the
+  `.hud-float` class so one selector still finds every one of them, which is
+  what the no-orphans assertion needs.
+- **A value a test asserts on lives in `textContent`, and decoration is a
+  `::before`.** Status badges, status pop-ups and the chain counter all follow
+  this: the counter reads exactly `4`, not `CHAIN × 4`.
 - Coordinate convention: Y-up, -Z into the screen.
 
 ## Commands
@@ -101,6 +107,12 @@ earning its place in `dist.spec.ts`.
 | `?time=` | Render one frame at this simulated time, then halt. |
 | `?stepMs=` | Sequencer pause between beats. Default 350. Enemy beats are `ENEMY_BEAT_MULTIPLIER`× this. |
 | `?bossHp=` | Override boss max HP **and** HP. For the victory e2e test. |
+| `?floatMs=` | How long a damage number lives. Default 900. |
+
+`?floatMs=` exists so the effect can be photographed at all: a number is gone
+900ms after the hit, and `shoot.mjs` captures after the turn has settled. It
+holds the element open without touching the timing of anything else — only how
+long a number persists, never how long it takes to arrive.
 
 `?bossHp=` shortens the boss rather than the pauses, so the e2e victory run
 still exercises real turn timing. The two lock tests go the other way and
@@ -264,7 +276,10 @@ Card facts worth knowing before changing them:
   which is how `command_menu` gets a menu two levels deep. Keys that SUBMIT
   an action need `settle: true` as well, or the capture photographs the turn
   mid-flight at a different beat every run — `action_log` pairs it with
-  `stepMs=0` so the wait costs nothing.
+  `stepMs=0` so the wait costs nothing. `settle` waits BETWEEN keypresses as
+  well as after the last: the input lock drops a rejected keypress rather than
+  queueing it, so two Enters fired back to back are one action and one
+  discarded, and a two-turn shot silently becomes a one-turn shot.
 - **DOM-only e2e specs load with `?time=0`.** That renders one frame and halts
   the animation loop. Headless Chromium has no GPU, so the scene rasterises in
   software at 135-200ms a frame, and leaving the loop running made the suite
@@ -306,13 +321,46 @@ player's attention has already left. What the log rests on:
   edge is a constant; an e2e test reads the head from `__debugState.sprites`
   rather than hardcoding it, so re-laying out the party fails loudly.
 
+**Phase 5 finished: floating combat numbers.** `src/ui/floatLayer.ts` renders
+damage, criticals, heals and status pop-ups over the character they happened
+to, plus the chain counter over the boss. What it rests on:
+
+- **It is EVENT-driven, and deliberately not part of `renderHud`.** `renderHud`
+  is a pure function of `HudModel` — render it twice, get the same HUD — which
+  is what makes it safe to call on every keypress. A number is the opposite: it
+  fires once, and "145 damage was dealt" is not recoverable from the state
+  afterwards, only from the event. So `main.ts` diffs `view.log` by count (the
+  same append-only trick the action log uses) and feeds `spawn`.
+- **`#floats` is a SIBLING of `#hud`, and that is load-bearing.** `renderHud`
+  calls `replaceChildren()` on its root to build the skeleton once, so a layer
+  parked inside `#hud` is detached on the first render — and detached is worse
+  than broken, because spawning carries on appending to a node nobody can see.
+- **A float runs TWO animations.** A fixed 140ms arrival and the
+  `--float-ms`-long rise. One keyframe ramping in over the first 15% is fine
+  at 900ms and nonsense at `?floatMs=60000`, where the number spends nine
+  seconds fading in. How long a number is *readable* and how long it takes to
+  *arrive* are different questions and only the first should scale. Removal
+  therefore ignores `animationend` for `hud-float-in` — a listener that fires
+  on the first event it sees deletes every number 140ms after it appears.
+- **Reduced motion must NOT switch the animation off.** Removal is driven by
+  `animationend`, so `animation: none` means every number ever spawned stays
+  in the DOM forever. The fade and the duration stay; only the travel goes.
+  This is the one entry in that media block where `none` would be a bug.
+- **`--float-rise` is bounded by the boss bar.** The boss's head projects to
+  y 0.147 with the APOLLYON bar bottoming out near 0.09 — about 41px for the
+  glyphs *and* the travel. The e2e test seeks the animation to 99% and
+  measures there, because a resting box that clears the bar proves nothing.
+- **Numbers fan down-left; the chain counter hangs down-right.** Every landed
+  hit spawns a number *and* bumps the chain, so those two share the screen
+  almost permanently — in one column, one of them is always hidden. The fan is
+  counted from floats currently ALIVE on that target, not from position within
+  a commit: two turns in quick succession collide exactly as much as two hits
+  in one turn.
+
 Not done, and the obvious next steps:
 
 - **The round/chain/phase strip.** The last unstyled region. The display
   typeface is still an open decision.
-- **The damage-number layer.** The seam is ready: a sprite's `name` is its
-  `ActorId`, so a `damage` event's `targetId` resolves to a sprite and
-  `headScreenPosition()` gives the anchor.
 - **Per-enemy-turn granularity.** `advance` resolves every enemy turn in one
   call, so a boss turn narrates beat by beat but its HP change lands in a
   single commit. Splitting it needs a new entry point in `battle.ts`.

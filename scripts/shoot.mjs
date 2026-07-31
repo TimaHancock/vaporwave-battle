@@ -111,31 +111,40 @@ async function main() {
        * shots that use it stop short of submitting an action, so the battle
        * state at capture is the same one the seed produced.
        */
-      for (const key of shot.keys ?? []) {
-        await page.keyboard.press(key);
-      }
-
       /*
-       * Optionally wait for the turn those keys started to finish playing.
+       * `settle` waits for the input lock to clear.
        *
-       * Without this, a shot whose keys SUBMIT an action photographs the
+       * Without it, a shot whose keys SUBMIT an action photographs the
        * sequence mid-flight -- at whatever beat the round trip happened to
        * land on, differently every run. The turn_order shot avoids the
-       * problem by not pressing anything; a shot whose subject is the
-       * action log has no such option, because an untouched battle has one
-       * line in it.
+       * problem by not pressing anything; a shot whose subject is the action
+       * log or a damage number has no such option, because an untouched
+       * battle has neither.
+       *
+       * BETWEEN each key as well as after the last, because the input lock
+       * DROPS a keypress it rejects rather than queueing it -- that is the
+       * sequencer's contract. Two Enters fired back to back are one action
+       * and one silently discarded, so a two-turn shot would quietly be a
+       * one-turn shot.
        *
        * Waiting on the lock rather than sleeping is what keeps it
-       * deterministic: the seed decides the outcome, and this only decides
-       * when to look. Pair it with `stepMs=0` so the wait is instant.
+       * deterministic: the seed decides the outcome, this only decides when
+       * to look. Pair it with `stepMs=0` so the wait costs nothing.
        */
-      if (shot.settle) {
+      const settle = async () => {
+        if (!shot.settle) return;
         await page.waitForFunction(
           () => window.__debugState?.battle?.isLocked === false,
           null,
           { timeout: READY_TIMEOUT_MS },
         );
+      };
+
+      for (const key of shot.keys ?? []) {
+        await settle();
+        await page.keyboard.press(key);
       }
+      await settle();
 
       const state = await page.evaluate(() => window.__debugState);
 

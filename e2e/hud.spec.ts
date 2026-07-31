@@ -960,6 +960,227 @@ test.describe('the action log', () => {
   });
 });
 
+/**
+ * Floating combat numbers and the chain counter.
+ *
+ * These live in #floats, a SIBLING of #hud — renderHud replaceChildren()s its
+ * own root, so a layer inside it is detached on the first render and every
+ * number afterwards is appended to a node nobody can see. That failure is
+ * invisible to a unit test and obvious here, which is why the position
+ * assertions below are worth their cost.
+ *
+ * `floatMs` is the lever that makes any of this assertable: at the shipped
+ * 900ms a number is gone long before a round trip can measure it. Tests that
+ * inspect a float hold it open; the one test that cares about CLEANUP uses
+ * the real duration, because that is the behaviour under test.
+ */
+test.describe('floating combat numbers', () => {
+  /** Every float, whatever kind. The no-orphans check needs one selector. */
+  const floats = (page: Page) => page.locator('.hud-float');
+
+  /* `ready` pins seed 1337 and URLSearchParams.get returns the FIRST match,
+     so a second `seed=` in the query string would be silently ignored. Tests
+     that need a different battle build the URL themselves. */
+  async function openBattle(page: Page, query: string): Promise<void> {
+    await page.goto(`/?time=0&${query}`);
+    await page.waitForFunction(() => window.__debugState?.battle != null);
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+  }
+
+  /** A turn, played out to the handover. */
+  async function takeTurn(page: Page): Promise<void> {
+    await page.keyboard.press('Enter');
+    await idle(page);
+  }
+
+  test('a hit puts its damage over the target', async ({ page }) => {
+    await ready(page, '&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+
+    const number = page.getByTestId('damage-number').first();
+    await expect(number).toBeVisible();
+
+    /* The DOM says what the battle says. Read from the event log rather than
+       hardcoded, so a damage-formula change does not silently invalidate
+       this into a test of nothing. */
+    const { log } = await page.evaluate(() => window.__debugState!.battle!);
+    const damage = log.find((event) => event['kind'] === 'damage');
+    expect(damage, 'a damage event').toBeDefined();
+    await expect(number).toHaveText(String(damage!['amount']));
+  });
+
+  test('the number sits where the target is', async ({ page }) => {
+    await ready(page, '&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+
+    const viewport = page.viewportSize()!;
+    const box = (await page.getByTestId('damage-number').first().boundingBox())!;
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+    const boss = sprites.find((sprite) => sprite.name === 'apollyon')!;
+
+    /* The element is `translate: -50% -100%`, so its horizontal centre is the
+       anchor and its BOTTOM is the anchor — it grows up out of the head
+       rather than straddling it. Anchoring is the whole feature; a number
+       floating over the wrong character is worse than no number. */
+    const centreX = (box.x + box.width / 2) / viewport.width;
+    const bottomY = (box.y + box.height) / viewport.height;
+
+    expect(centreX, 'number centre vs boss head x').toBeCloseTo(boss.headScreen[0], 1);
+    expect(bottomY, 'number bottom vs boss head y').toBeCloseTo(boss.headScreen[1], 1);
+  });
+
+  test('a critical is marked and reads larger', async ({ page }) => {
+    /* Seed 7 crits on the opening turn. Chosen rather than hunted for: a test
+       that drives turns until a crit happens passes vacuously on a seed where
+       one never does. */
+    await openBattle(page, 'seed=7&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+
+    const { log } = await page.evaluate(() => window.__debugState!.battle!);
+    const crit = log.find(
+      (event) => event['kind'] === 'damage' && event['isCritical'] === true,
+    );
+    expect(crit, 'seed 7 should crit on turn one').toBeDefined();
+
+    const number = page.getByTestId('damage-number').first();
+    await expect(number).toHaveAttribute('data-kind', 'critical');
+    await expect(number).toHaveText(String(crit!['amount']));
+
+    /* Larger, not merely a different hue: ember against magenta is a
+       comparison, where twice the glyph height reads peripherally. */
+    const size = await number.evaluate((el) =>
+      Number.parseFloat(getComputedStyle(el).fontSize),
+    );
+    const ordinary = await page.evaluate(() =>
+      Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('font-size'),
+      ),
+    );
+    expect(size, 'critical font size').toBeGreaterThan(ordinary);
+  });
+
+  test('numbers clear the boss bar even at the top of their rise', async ({
+    page,
+  }) => {
+    await ready(page, '&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+
+    const bar = (await page.getByTestId('boss-bar').boundingBox())!;
+
+    /* THE CONSTRAINT ON --float-rise. The boss's head projects just under the
+       APOLLYON bar, and a number travels upward from it — so the resting box
+       clearing the bar proves nothing. Seek the animation to its end and
+       measure THERE. 99% rather than 100%: finishing it fires animationend
+       and the element removes itself mid-measurement. */
+    const top = await page
+      .getByTestId('damage-number')
+      .first()
+      .evaluate((el) => {
+        const animation = el.getAnimations()[0];
+        if (animation !== undefined) {
+          const timing = animation.effect!.getComputedTiming();
+          animation.currentTime = Number(timing.activeDuration) * 0.99;
+        }
+        return el.getBoundingClientRect().top;
+      });
+
+    expect(top, 'risen number top vs boss bar bottom').toBeGreaterThanOrEqual(
+      bar.y + bar.height,
+    );
+  });
+
+  test('removes itself from the DOM, leaving no orphans', async ({ page }) => {
+    /* THE REAL DURATION. Every other test here holds the numbers open, which
+       is exactly the condition under which a cleanup bug hides. */
+    await ready(page, '&stepMs=0');
+
+    await takeTurn(page);
+    await expect(floats(page)).not.toHaveCount(0);
+
+    /* Back to nothing on its own, with no further interaction. */
+    await expect(floats(page)).toHaveCount(0, { timeout: 5_000 });
+
+    /* And still nothing after several more turns — a leak that drops one
+       element per turn passes a single-turn check. */
+    for (let turn = 0; turn < 3; turn++) await takeTurn(page);
+    await expect(floats(page)).toHaveCount(0, { timeout: 5_000 });
+  });
+
+  test('the layer survives the HUD rebuilding itself', async ({ page }) => {
+    /* renderHud builds its skeleton once and replaceChildren()s the root to
+       do it. #floats is a sibling for that reason, and this is the assertion
+       that says so — it fails if the layer is ever moved back inside #hud. */
+    await ready(page, '&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+
+    const parked = await page
+      .getByTestId('float-layer')
+      .evaluate((el) => el.closest('#hud') === null && el.isConnected);
+
+    expect(parked, 'float layer is connected and outside #hud').toBe(true);
+    await expect(page.getByTestId('damage-number').first()).toBeVisible();
+  });
+
+  test.describe('the chain counter', () => {
+    test('stays hidden until a chain is actually a chain', async ({ page }) => {
+      await ready(page, '&stepMs=0&floatMs=60000');
+
+      /* Nothing landed yet. */
+      await expect(page.getByTestId('chain-counter')).toHaveCount(0);
+
+      /* One hit is a hit, not a chain. */
+      await takeTurn(page);
+      expect((await page.evaluate(() => window.__debugState!.battle!)).chain).toBe(1);
+      await expect(page.getByTestId('chain-counter')).toHaveCount(0);
+    });
+
+    test('counts landed hits and clears the boss bar', async ({ page }) => {
+      await ready(page, '&stepMs=0&floatMs=60000');
+      await takeTurn(page);
+      await takeTurn(page);
+
+      const chain = (await page.evaluate(() => window.__debugState!.battle!)).chain;
+      expect(chain, 'two hits in a row').toBe(2);
+
+      const counter = page.getByTestId('chain-counter');
+      /* textContent is the bare number — the word CHAIN is a ::before, the
+         same arrangement the status badges use so the value stays readable. */
+      await expect(counter).toHaveText(String(chain));
+
+      const box = (await counter.boundingBox())!;
+      const bar = (await page.getByTestId('boss-bar').boundingBox())!;
+      expect(box.y, 'chain counter vs boss bar bottom').toBeGreaterThanOrEqual(
+        bar.y + bar.height,
+      );
+    });
+
+    test('breaks when the party takes damage', async ({ page }) => {
+      await ready(page, '&stepMs=0&floatMs=60000');
+
+      /* Four party turns, then the boss acts and the chain breaks. */
+      for (let turn = 0; turn < 4; turn++) await takeTurn(page);
+
+      const { chain } = await page.evaluate(() => window.__debugState!.battle!);
+      expect(chain, 'the boss connecting breaks the chain').toBe(0);
+      await expect(page.getByTestId('chain-counter')).toHaveCount(0);
+    });
+  });
+
+  test.describe('with reduced motion requested', () => {
+    test('still removes its numbers rather than leaking them', async ({ page }) => {
+      /* THE ONE PLACE `animation: none` WOULD BE A BUG. Removal is driven by
+         animationend, so switching the animation off under reduced motion
+         means it never fires and every number ever spawned stays forever.
+         The fade is kept and only the travel is dropped. */
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await ready(page, '&stepMs=0');
+
+      await takeTurn(page);
+      await expect(floats(page)).toHaveCount(0, { timeout: 5_000 });
+    });
+  });
+});
+
 test.describe('the strip as a layout', () => {
   test('sits below the party feet so contact shadows stay visible', async ({
     page,

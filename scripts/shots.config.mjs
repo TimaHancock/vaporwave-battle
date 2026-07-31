@@ -102,6 +102,35 @@ export const SHOTS = [
     clip: { x: 0, y: 0, width: 0.2, height: 0.1 },
   },
   {
+    name: 'damage_numbers',
+    description:
+      'One turn resolved, with the floating numbers held open. The questions ' +
+      'no assertion can answer -- does a number read as BELONGING to the ' +
+      'character it hangs over, or as HUD text that happens to be nearby? ' +
+      'Is a critical distinguishable at a glance rather than on inspection? ' +
+      'Are the glyphs legible against the sprite behind them, and does the ' +
+      'chain counter sit clear of both the boss bar above it and the ' +
+      'numbers rising past it?',
+    seed: 7,
+    time: 1.0,
+    /* seed 7 crits on the opening turn, so the shot shows an ordinary hit
+       and a critical side by side rather than needing two captures.
+
+       floatMs is the whole trick: a number lives 900ms and the capture
+       happens after the turn settles, so at the shipped duration there is
+       nothing left to photograph. Holding it open changes only how long the
+       element persists -- the seed still decides every number in it. */
+    /* TWO turns, so the chain counter is past its threshold of 2 and in
+       frame alongside the numbers. `settle` waits between the keypresses as
+       well as after them -- the input lock DROPS a rejected keypress rather
+       than queueing it, so without that this would silently be one turn. */
+    query: 'stepMs=0&floatMs=60000',
+    keys: ['Enter', 'Enter'],
+    settle: true,
+    scale: 2,
+    clip: { x: 0.45, y: 0, width: 0.55, height: 0.6 },
+  },
+  {
     name: 'action_log',
     description:
       'The upper-left action log, one full turn in: the narration history ' +

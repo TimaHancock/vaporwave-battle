@@ -11,7 +11,7 @@
   </head>
   <body>
     <!--
-      Two layers, and the separation is architectural, not cosmetic:
+      Three layers, and the separation is architectural, not cosmetic:
 
         #stage  — the three.js canvas. Environment geometry and, from
                   Phase 4c, sprite billboards for the characters.
@@ -19,13 +19,25 @@
         #hud    — ordinary DOM, layered on top. All menus, bars, text and
                   numbers live here. Never render UI inside three.js.
 
+        #floats — transient combat feedback: damage numbers, status
+                  pop-ups, the chain counter.
+
       Keeping the interface in the DOM is what lets the verification
       harness read exact game state with selectors instead of guessing at
       pixels. Roughly 80% of this game is interface, so that channel is
       worth protecting.
+
+      #floats is a SIBLING of #hud rather than a child, and that is load
+      bearing. renderHud owns #hud outright — it builds its skeleton once
+      and calls replaceChildren() to do it, so anything else parked in
+      there is deleted on the first render. The two also have genuinely
+      different lifecycles: #hud is a pure function of battle state, while a
+      float is fired by an event and cannot be re-derived from the state it
+      leaves behind.
     -->
     <canvas id="stage"></canvas>
     <div id="hud"></div>
+    <div id="floats"></div>
 
     <noscript>
       This game runs in the browser and needs JavaScript enabled.

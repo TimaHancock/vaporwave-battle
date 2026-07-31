@@ -127,6 +127,20 @@
   --log-line: 1.4rem;
   --log-lines: 5;
   --log-height: calc(var(--log-lines) * var(--log-line));
+
+  /* Floating combat numbers. --float-ms is overwritten on the container from
+     ?floatMs=; the value here is the one the game actually plays at.
+
+     --float-rise IS NOT FREE TO GROW. A number is anchored to its target's
+     head and travels upward from it, and the boss's head projects to screen
+     y 0.147 with the APOLLYON bar bottoming out around 0.09 -- roughly 41px
+     of headroom at 720p for the glyphs AND the travel. e2e/hud.spec.ts
+     measures a boss damage number against the bar's box and fails if they
+     meet. Same shape of constraint as --card-strip against the party's feet. */
+  --float-ms: 900ms;
+  --float-rise: 1.15rem;
+  --float-size: 1.05rem;
+  --float-size-crit: 1.5rem;
 }
 
 * {
@@ -822,6 +836,218 @@ body {
   color: var(--horizon);
 }
 
+/* ---------- Floating combat numbers ---------- */
+
+/*
+ * The third layer: #stage, then #hud, then this.
+ *
+ * A SIBLING of #hud, not a child. renderHud calls replaceChildren() on its
+ * root to build the skeleton once, so a container parked inside #hud is
+ * detached on the first render -- and detached is worse than broken, because
+ * spawning carries on appending to a node nobody can see. See index.html.
+ *
+ * No padding, deliberately. A float is positioned by PERCENTAGE from a
+ * normalised anchor, and a percentage resolves against the containing
+ * block's padding box; #hud's `padding: 1rem` would put every number an
+ * inconsistent fraction off. This box is exactly the viewport, which is
+ * exactly what headScreenPosition measures against.
+ */
+#floats {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  /* Over the HUD. A number is on screen for under a second and is the thing
+     the player is meant to be reading while it is there. */
+  z-index: 2;
+}
+
+.hud-floats {
+  position: absolute;
+  inset: 0;
+}
+
+/*
+ * One number.
+ *
+ * `translate` rather than `transform` for the centring. They are separate
+ * properties, so the rise keyframe below owns `transform` outright and never
+ * has to restate `-50% -100%` -- which is the usual way this effect breaks,
+ * with the first keyframe silently dropping the centring and every number
+ * jumping right and down as it starts.
+ *
+ * -100% on the Y puts the element's BOTTOM on the anchor, so it grows upward
+ * out of the character's head rather than straddling it.
+ */
+.hud-float {
+  position: absolute;
+  translate: -50% -100%;
+  font-size: var(--float-size);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--chrome);
+  /* A hard dark edge, not a glow. These land over sprites and the platform,
+     both mid-tone, and a bloom alone leaves the glyphs muddy. */
+  text-shadow: 0 2px 4px var(--void-deep), 0 0 10px var(--void-deep);
+  /*
+   * TWO animations, and the arrival is a FIXED duration rather than a
+   * percentage of the whole.
+   *
+   * It used to be one keyframe ramping in over the first 15%, which is fine
+   * at the shipped 900ms and nonsense the moment --float-ms is raised: at
+   * ?floatMs=60000 the number spent nine seconds fading in and the
+   * screenshot caught it at five percent opacity. How long a number is
+   * READABLE and how long it takes to ARRIVE are different questions, and
+   * only the first one should scale.
+   *
+   * Order matters. Later animations win on a property they share, so the
+   * rise is listed first and the arrival second -- the arrival owns opacity
+   * for its 140ms, then ends without `forwards` and hands opacity back to
+   * the rise, which holds it at 1 until the tail.
+   */
+  animation:
+    hud-float-rise var(--float-ms) ease-out forwards,
+    hud-float-in 140ms ease-out;
+}
+
+/*
+ * A CRITICAL. Larger and ember.
+ *
+ * Size does the work here, not hue: ember against magenta is a shift the eye
+ * has to compare to notice, where twice the glyph height is legible in
+ * peripheral vision. Both together is what makes it read at a glance.
+ */
+.hud-float[data-kind='critical'] {
+  font-size: var(--float-size-crit);
+  color: var(--ember);
+  text-shadow: 0 2px 4px var(--void-deep), 0 0 14px var(--ember-deep);
+}
+
+.hud-float[data-kind='heal'] {
+  color: var(--chrome);
+  text-shadow: 0 2px 4px var(--void-deep), 0 0 12px var(--signal);
+}
+
+/*
+ * A status pop-up wears the badge's clothes.
+ *
+ * Same glyph, same colour per kind as .hud-status on the cards -- because it
+ * IS the same event, seen twice: once flying off the target, once landing in
+ * the card's status row. Two visual languages for one fact is how the two
+ * regions drift.
+ *
+ * ::before, so the glyph stays out of textContent and a test reads exactly
+ * `DEF_UP`. The same rule the card badges follow.
+ */
+.hud-float[data-kind='status'] {
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+}
+
+.hud-float[data-kind='status']::before {
+  margin-right: 0.25rem;
+}
+
+.hud-float[data-status='ATK_UP']::before {
+  content: '\25B2';
+  color: var(--ember);
+}
+
+.hud-float[data-status='DEF_UP']::before {
+  content: '\25C6';
+  color: var(--chrome);
+}
+
+.hud-float[data-status='HASTE']::before {
+  content: '\00BB';
+  color: var(--horizon);
+}
+
+/* The arrival. Fixed length, so it stays a flick however long the number is
+   then held for. */
+@keyframes hud-float-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The hold and the departure. Opacity sits at 1 for most of --float-ms so
+   the number is legible for nearly all of its life, then goes at the tail. */
+@keyframes hud-float-rise {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(calc(-1 * var(--float-rise)));
+    opacity: 0;
+  }
+}
+
+/*
+ * The chain counter, riding above the boss.
+ *
+ * Anchored to the same head the damage numbers are, then pushed clear of them
+ * in BOTH axes -- down, because they rise upward into the gap between the
+ * boss's head and its HP bar, and right, because a second number fans down
+ * and to the left. Every landed hit spawns a number AND bumps the chain, so
+ * these two are on screen together more or less permanently; sharing a
+ * column means one of them is always hidden behind the other.
+ *
+ * `translate: 0 0` rather than centring: the left edge sits on the anchor, so
+ * the whole counter is to the right of the head and its width does not creep
+ * back across it as the number of digits grows.
+ *
+ * The word CHAIN is a ::before for the same reason the status glyph is --
+ * textContent stays exactly the number, so a test asserts `4` rather than
+ * parsing a label off the front of it.
+ */
+.hud-chain {
+  position: absolute;
+  margin-left: 1.2rem;
+  margin-top: 1.6rem;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.1em;
+  color: var(--ember);
+  background: color-mix(in srgb, var(--void-deep) 55%, transparent);
+  backdrop-filter: blur(3px);
+  text-shadow: 0 2px 4px var(--void-deep);
+  /* Cyan as a RULE, never a fill -- the same single edge the active card and
+     the selected menu row wear. */
+  box-shadow: inset 2px 0 0 var(--signal);
+}
+
+.hud-chain::before {
+  content: 'CHAIN \00D7';
+  margin-right: 0.3rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.2em;
+  color: color-mix(in srgb, var(--chrome) 75%, transparent);
+}
+
+/* Restarted from JS by removing and re-adding the class, so the counter
+   pulses once per increment rather than continuously. */
+.hud-chain.is-hit {
+  animation: hud-chain-hit var(--card-motion) ease-out;
+}
+
+@keyframes hud-chain-hit {
+  from {
+    scale: 1.35;
+    color: var(--chrome);
+  }
+}
+
 /* ---------- Accessibility floor ---------- */
 
 /* In the DOM and the accessibility tree, out of the picture. Carries the
@@ -854,5 +1080,36 @@ body {
   /* The age ramp is information, so it stays. Only the arrival moves. */
   .hud-log__line[data-age='0'] {
     animation: none;
+  }
+
+  /*
+   * A FLOAT KEEPS ITS ANIMATION. This is the one place in this block where
+   * `animation: none` would be a bug rather than a courtesy: the element is
+   * removed on `animationend`, so switching the animation off means the
+   * event never fires and every number ever spawned stays in the DOM
+   * forever. Exactly the orphan accumulation the feature is required not to
+   * do.
+   *
+   * So: same duration, same fade, no travel.
+   */
+  .hud-float {
+    animation-name: hud-float-fade;
+  }
+
+  /* Decorative, and removes nothing. Safe to drop outright. */
+  .hud-chain.is-hit {
+    animation: none;
+  }
+}
+
+@keyframes hud-float-fade {
+  from {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
   }
 }

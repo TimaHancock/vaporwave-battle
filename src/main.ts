@@ -27,8 +27,13 @@ import { createBattleScene, CAMERA } from './scene/battleScene';
 import { createPostProcessing } from './scene/post';
 import { loadCharacterTexture } from './scene/sprite';
 import { layoutBoss, layoutParty } from './scene/spriteLayout';
-import { CAST, PARTY } from './scene/cast';
+import { BOSS, CAST, PARTY } from './scene/cast';
 import { renderHud, toHudModel } from './ui/hud';
+import {
+  createFloatLayer,
+  floatTargetOf,
+  type Anchor,
+} from './ui/floatLayer';
 import { back, confirm, moveCursor, INITIAL_MENU, type MenuState } from './ui/menu';
 import { createBattle } from './battle/battle';
 import { createRoster } from './battle/roster';
@@ -39,9 +44,10 @@ import { publishDebugState, type DebugState } from './debug';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage');
 const hudRoot = document.querySelector<HTMLElement>('#hud');
+const floatRoot = document.querySelector<HTMLElement>('#floats');
 
-if (canvas === null || hudRoot === null) {
-  throw new Error('Expected #stage and #hud in index.html');
+if (canvas === null || hudRoot === null || floatRoot === null) {
+  throw new Error('Expected #stage, #hud and #floats in index.html');
 }
 
 /* ---------------------------------------------------------------- */
@@ -76,6 +82,19 @@ const stepMs = nonNegativeParam(params.get('stepMs')) ?? DEFAULT_STEP_MS;
  */
 const bossMaxHp = nonNegativeParam(params.get('bossHp'));
 
+/**
+ * How long a floating number lives, in milliseconds.
+ *
+ * Overridable for the same reason `stepMs` is, but the use case is the
+ * opposite one: the screenshot harness needs the numbers to STAY. A float is
+ * gone 900ms after the hit that caused it, and `shoot.mjs` captures after the
+ * turn has settled -- so at the default there is nothing left to photograph.
+ * `?floatMs=60000` freezes the effect for the camera without touching the
+ * timing of anything else.
+ */
+const DEFAULT_FLOAT_MS = 900;
+const floatMs = nonNegativeParam(params.get('floatMs')) ?? DEFAULT_FLOAT_MS;
+
 /** Parses a non-negative integer parameter, ignoring anything else. */
 function nonNegativeParam(raw: string | null): number | undefined {
   if (raw === null) return undefined;
@@ -100,12 +119,13 @@ const PARTY_NAMES = PARTY.map((member) => member.name);
 /* Bootstrap                                                         */
 /* ---------------------------------------------------------------- */
 
-/* canvas and hudRoot arrive as parameters rather than closed over, because
-   the null guard above narrows straight-line module code but not a function
-   body -- TypeScript cannot know when the function is called. */
+/* The roots arrive as parameters rather than closed over, because the null
+   guard above narrows straight-line module code but not a function body --
+   TypeScript cannot know when the function is called. */
 async function main(
   canvas: HTMLCanvasElement,
   hudRoot: HTMLElement,
+  floatRoot: HTMLElement,
 ): Promise<void> {
   /* --- Renderer --------------------------------------------------- */
 
@@ -164,12 +184,73 @@ async function main(
     onChange: refresh,
   });
 
+  /* #floats, not hudRoot. renderHud replaceChildren()s its root on the first
+     call, so a layer parked inside #hud is silently detached the moment the
+     interface first renders -- it keeps working, appending to a node that is
+     no longer in the document, and nothing appears. See index.html. */
+  const floats = createFloatLayer(floatRoot, floatMs);
+
+  /**
+   * Sprites by ActorId, filled once the cast exists.
+   *
+   * A sprite's `name` IS its ActorId -- the correspondence cast.ts documents
+   * -- which is the whole seam that lets an event resolve to a place on
+   * screen.
+   */
+  const spritesById = new Map<string, (typeof battle.sprites)[number]>();
+
+  /**
+   * How many of `view.log` have already been turned into floats.
+   *
+   * The log only ever grows, so this stays a valid index for the life of the
+   * battle -- the same append-only diff the action log uses for narration.
+   * A count rather than a re-render is what stops `refresh()` re-spawning
+   * every number it has ever shown: refresh runs on each keypress too, and
+   * floats are events, not state.
+   */
+  let floatsSpawned = 0;
+
+  /** Where a float for this actor belongs, or null if it has no sprite. */
+  function anchorFor(actorId: string): Anchor | null {
+    const sprite = spritesById.get(actorId);
+    if (sprite === undefined) return null;
+    return sprite.headScreenPosition(battle.camera);
+  }
+
+  /**
+   * Spawn floats for whatever the battle has done since the last call.
+   *
+   * Spacing overlapping numbers apart is the LAYER's job, not this one's --
+   * it is the only thing that knows which floats are still on screen, and
+   * two turns in quick succession collide exactly as much as two hits in one
+   * commit do.
+   */
+  function emitFloats(view: SequencerView): void {
+    const fresh = view.log.slice(floatsSpawned);
+    floatsSpawned = view.log.length;
+    if (spritesById.size === 0) return;
+
+    for (const event of fresh) {
+      const targetId = floatTargetOf(event);
+      if (targetId === null) continue;
+      const at = anchorFor(targetId);
+      if (at === null) continue;
+      floats.spawn(event, at, targetId);
+    }
+  }
+
   /* One place the interface is rebuilt from state, called by the sequencer
      on every beat and by the keyboard handler on every keypress. Both the
      DOM and the debug channel are pure functions of the same view, so they
-     cannot disagree about what moment they are describing. */
+     cannot disagree about what moment they are describing.
+
+     The float layer is deliberately NOT part of that: it is fed the events
+     the view has accumulated since last time, because a number that has
+     already flown is not recoverable from the state it left behind. */
   function refresh(view: SequencerView = sequencer.view): void {
     renderHud(hudRoot, toHudModel(view.state, menu, view));
+    emitFloats(view);
+    floats.setChain(view.state.chain, anchorFor(BOSS.name));
     publish();
   }
 
@@ -376,6 +457,16 @@ async function main(
     })),
   );
 
+  /* The cast exists, so events can now resolve to a place on screen. Built
+     once here rather than looked up per event: a turn commits several events
+     at a time and the map outlives all of them. */
+  for (const sprite of battle.sprites) spritesById.set(sprite.name, sprite);
+
+  /* The opening refresh ran before any of this, when there was nothing to
+     anchor to. Nothing was missed -- the log is empty at boot -- but the
+     chain counter needs a position it could not have been given then. */
+  refresh();
+
   /* --- Go --------------------------------------------------------- */
 
   if (isStepMode) {
@@ -394,7 +485,7 @@ async function main(
    substitute would render as nothing at all, which in a screenshot is
    indistinguishable from a positioning bug. Rethrowing surfaces the reason
    to Playwright's pageerror hook, so the shot manifest records why. */
-void main(canvas, hudRoot).catch((error: unknown) => {
+void main(canvas, hudRoot, floatRoot).catch((error: unknown) => {
   console.error(
     'Bootstrap failed; the scene will never become ready.',
     error,
