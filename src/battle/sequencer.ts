@@ -31,7 +31,9 @@ import {
   type BattleEvent,
   type BattleState,
 } from './types';
-import { SKILLS, takeAction } from './actions';
+import { takeAction } from './actions';
+import { attackNameFor } from './classes';
+import { SKILLS } from './skills';
 import type { Rng } from '../rng';
 
 /* ------------------------------------------------------------------ */
@@ -420,7 +422,12 @@ export function describeAction(actor: Actor, action: Action, state: BattleState)
   switch (action.kind) {
     case 'attack': {
       const target = state.actors.find((a) => a.id === action.targetId);
-      return `${actor.name} attacks ${target?.name ?? action.targetId}!`;
+      /* The actor's own attack, not the word "attacks" -- the knight cleaves
+         and the rogue shivs. Same shape as the skill line below, so the two
+         read as one grammar. */
+      return `${actor.name} uses ${attackNameFor(actor)} on ${
+        target?.name ?? action.targetId
+      }!`;
     }
     case 'skill': {
       const skill = SKILLS[action.skillId];

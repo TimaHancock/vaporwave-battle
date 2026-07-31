@@ -61,21 +61,45 @@ export const SHOTS = [
     clip: { x: 0.56, y: 0.08, width: 0.36, height: 0.7 },
   },
   {
-    name: 'turn_order',
+    name: 'command_menu',
     description:
-      'The turn-order bar in the top-left: six portrait tiles, next up ' +
-      'first, the leading one wearing the same cyan rule and glow as the ' +
-      'active party card. The questions no assertion can answer -- is each ' +
-      'face identifiable at 36px, does the leading tile read as "up now", ' +
-      'and does a row of small bright squares compete with the boss bar?',
+      'The command menu two levels deep: COMMAND with SKILL chosen, the ' +
+      'knight skill list live beside it, and a target list open. Does the ' +
+      'cascade read left-to-right as a path? Is the dimmed parent legible ' +
+      'without competing with the active panel? And does the selected row ' +
+      'still read as selected now that cyan is a rule rather than a fill?',
     seed: 1337,
     time: 1.0,
-    /* scale, NOT a bigger viewport. The tiles are sized in rem, so a 2x
-       viewport would render the same 36px tile into twice as much frame and
-       make it relatively smaller. This keeps the layout at the size a player
-       sees and renders those pixels at 2x. */
+    /* ArrowDown to SKILL, Enter to open it, ArrowDown to the knight's
+       ally-targeted guard, Enter to open its target list. Stops short of
+       submitting, so the battle state is still the one the seed produced. */
+    keys: ['ArrowDown', 'Enter', 'ArrowDown', 'Enter'],
     scale: 2,
-    clip: { x: 0, y: 0, width: 0.34, height: 0.16 },
+    clip: { x: 0, y: 0.55, width: 0.62, height: 0.45 },
+  },
+  {
+    name: 'turn_order',
+    description:
+      'The turn-order carousel one turn in: the round as a ring, four ' +
+      'portraits whole and a fifth split across the seam. The questions no ' +
+      'assertion can answer -- do the two half-portraits read as ONE ' +
+      'character wrapping round, or as two unrelated crops? Does the fade ' +
+      'look like a shadowed edge rather than a hard cut? And does the cursor ' +
+      'sit convincingly over the face whose turn it is?',
+    seed: 1337,
+    time: 1.0,
+    /* Deliberately NOT driven with keys. A keypress starts a sequence that
+       takes several beats to resolve, and the capture happens immediately --
+       so it would photograph a turn mid-flight, differently each run. The
+       opening rest state is the one worth judging anyway: APOLLYON is the
+       split portrait, and the seam is the whole question.
+
+       scale, NOT a bigger viewport. The tiles are sized in rem, so a larger
+       viewport would render the same 36px tile into more frame and make it
+       relatively smaller. 3x because a half-portrait dissolving into shadow
+       cannot be judged at native size. */
+    scale: 3,
+    clip: { x: 0, y: 0, width: 0.2, height: 0.1 },
   },
   {
     name: 'party_cards',

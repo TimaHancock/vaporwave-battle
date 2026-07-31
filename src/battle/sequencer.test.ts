@@ -6,6 +6,7 @@ import {
   type SequencerView,
 } from './sequencer';
 import { createBattle } from './battle';
+import { attackNameFor } from './classes';
 import { BOSS_STATS, makeBoss, makeParty, makeRoster } from './fixtures';
 import { createRng } from '../rng';
 import type { Action, BattleState } from './types';
@@ -144,8 +145,12 @@ describe('the step queue', () => {
     sequencer.submit(ATTACK);
     await sequencer.settled();
 
+    /* Derived, not hardcoded: KIRA is a knight, so the line names the
+       knight's attack. Reading it from the class table means renaming an
+       attack does not need this test edited to stay true. */
     const lines = views.map((view) => view.narration);
-    const action = lines.findIndex((line) => line.includes('KIRA attacks'));
+    const attack = attackNameFor(makeParty()[0]!);
+    const action = lines.findIndex((line) => line.includes(`KIRA uses ${attack}`));
     const damage = lines.findIndex((line) => line.includes('takes'));
 
     expect(action).toBeGreaterThanOrEqual(0);

@@ -30,8 +30,20 @@ async function idle(page: Page): Promise<void> {
   await page.waitForFunction(() => window.__debugState?.battle?.isLocked === false);
 }
 
+/**
+ * `time=0` renders one frame and halts the animation loop.
+ *
+ * Nothing in this file looks at the canvas -- it is all DOM and debug state --
+ * and headless Chromium rasterises the scene in software at ~135-200ms a
+ * frame. Leaving the loop running makes every test here compete for CPU spent
+ * drawing something it never asserts on.
+ *
+ * It does NOT weaken what these tests are for. The sequencer runs on real
+ * timers regardless of the render loop, so the input lock, the beat timing and
+ * the narration order under test are the ones a player gets.
+ */
 async function ready(page: Page, query = ''): Promise<void> {
-  await page.goto(`/?seed=1337${query}`);
+  await page.goto(`/?seed=1337&time=0${query}`);
   await page.waitForFunction(() => window.__debugState?.battle != null);
 }
 
@@ -78,12 +90,13 @@ test.describe('the battle is wired to the interface', () => {
     await expect(slot).toHaveAttribute('data-actor', 'kira');
     await expect(page.getByTestId('active-actor')).toHaveText('kira');
 
-    /* Descending speed, boss last, then the round rolls over. */
+    /* Descending speed, boss last. The carousel shows the round as a ring, so
+       each actor appears once -- the tiles beyond these are the lead-in
+       duplicates the slide needs, and are read from their own testids. */
     const order = await page
-      .getByTestId('turn-order')
-      .locator('li')
+      .locator('[data-testid^="turn-order-slot-"]')
       .evaluateAll((items) => items.map((item) => item.getAttribute('data-actor')));
-    expect(order).toEqual(['kira', 'neo', 'vex', 'lyra', 'apollyon', 'kira']);
+    expect(order).toEqual(['kira', 'neo', 'vex', 'lyra', 'apollyon']);
   });
 });
 
@@ -221,9 +234,13 @@ test.describe('the menu', () => {
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
 
+    /* KIRA is a knight, so this is the knight's list -- the whole skill table
+       is no longer offered to everyone. */
     await expect(page.getByTestId('menu-title')).toHaveText('Skill');
-    await expect(page.getByTestId('skill-pulse_strike')).toBeVisible();
-    await expect(page.getByTestId('skill-overclock')).toContainText('18 MP');
+    await expect(page.getByTestId('skill-ember_lance')).toBeVisible();
+    await expect(page.getByTestId('skill-bulwark_protocol')).toContainText('12 MP');
+    /* And the artificer's heal is not reachable from here. */
+    await expect(page.getByTestId('skill-repair_field')).toHaveCount(0);
 
     await page.keyboard.press('Escape');
 
@@ -242,8 +259,8 @@ test.describe('the menu', () => {
 
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
-    /* repair_field: ally-targeted, so the choice is real. */
-    await page.keyboard.press('ArrowDown');
+    /* bulwark_protocol, index 1 of the knight's list: ally-targeted, so the
+       choice is real rather than auto-resolved. */
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
 
@@ -257,8 +274,13 @@ test.describe('the menu', () => {
     await idle(page);
 
     const { log } = await battleState(page);
-    expect(log.some((event) => event['kind'] === 'heal')).toBe(true);
-    await expect(page.getByTestId('actor-kira-mp')).toHaveText('100/120');
+    expect(
+      log.some(
+        (event) => event['kind'] === 'statusApplied' && event['targetId'] === 'kira',
+      ),
+    ).toBe(true);
+    await expect(page.getByTestId('actor-kira-mp')).toHaveText('108/120');
+    await expect(page.getByTestId('actor-kira-statuses')).toHaveText('DEF_UP');
   });
 
   test('DEFEND applies a guard and costs no MP', async ({ page }) => {

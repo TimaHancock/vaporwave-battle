@@ -20,30 +20,24 @@ export default defineConfig({
   reporter: process.env['CI'] ? 'github' : 'list',
 
   /*
-   * EVERY TEST HERE BOOTS A SOFTWARE-RENDERED WEBGL SCENE.
+   * A raised timeout, but the default worker count.
    *
-   * Headless Chromium has no GPU, so three.js runs through SwiftShader.
-   * Measured on this scene at 1280x720: ~135-200ms per frame, about 5-7 fps,
-   * and hiding the entire HUD changes it by nothing -- the cost is the scene
-   * and its bloom pipeline being rasterised on the CPU.
+   * Headless Chromium has no GPU, so three.js runs through SwiftShader --
+   * measured on this scene at 1280x720, about 135-200ms per frame. That made
+   * the suite slow and flaky until the DOM specs started loading with
+   * `?time=0`, which renders one frame and halts the animation loop; see the
+   * note on `ready()` in e2e/hud.spec.ts. The whole suite went from ~3min with
+   * timeouts to under a minute clean, so capping workers is no longer buying
+   * anything.
    *
-   * Two consequences, and the defaults are wrong for both:
+   * The timeout stays above the 30s default because harness.spec.ts still
+   * renders real frames -- it has to, it asserts on draw calls and sprite
+   * geometry -- and a scene test on a busy machine is legitimately slow.
    *
-   *   timeout -- a test that plays a dozen turns at real sequencer timing
-   *   legitimately takes 20-30s. At the 30s default those tests sat on the
-   *   edge and fell off whenever the machine was busy, which reads as a UI
-   *   bug and is not one.
-   *
-   *   workers -- the default is derived from core count, but the contended
-   *   resource is CPU spent on software rasterisation, and every worker wants
-   *   all of it. Seven workers made each test 3x slower than running alone,
-   *   so the parallelism was buying nothing and costing reliability.
-   *
-   * If these ever need raising again, measure first: a scene that got slower
-   * is the more likely explanation than a suite that got bigger.
+   * If this needs raising again, measure before assuming: a spec that stopped
+   * using step mode is more likely than the suite simply getting bigger.
    */
-  timeout: 60_000,
-  workers: process.env['CI'] ? 2 : 4,
+  timeout: 45_000,
 
   use: {
     baseURL: 'http://localhost:5173',

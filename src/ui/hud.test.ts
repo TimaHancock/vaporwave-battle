@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LOW_HP_FRACTION, toHudModel, TURN_PREVIEW_LENGTH } from './hud';
+import { LOW_HP_FRACTION, toHudModel } from './hud';
 import { INITIAL_MENU } from './menu';
 import { createBattle } from '../battle/battle';
 import { makeActor, makeBoss, makeParty, makeRoster } from '../battle/fixtures';
@@ -68,21 +68,29 @@ describe('toHudModel', () => {
     expect(model().activeActorId).toBe('kira');
   });
 
-  it('previews the turn order with the current actor first', () => {
+  it('gives the round as a ring, leading with whoever is up', () => {
     const turnOrder = model().turnOrder;
 
-    expect(turnOrder).toHaveLength(TURN_PREVIEW_LENGTH);
-    expect(turnOrder[0]?.id).toBe('kira');
-    /* Descending speed: the party leads, the boss brings up the rear, then
-       the next round begins. */
+    /* Descending speed: the party leads, the boss brings up the rear. Each
+       actor ONCE -- it is a cycle, not a lookahead. */
     expect(turnOrder.map((entry) => entry.id)).toEqual([
       'kira',
       'neo',
       'vex',
       'lyra',
       'apollyon',
-      'kira',
     ]);
+    expect(turnOrder[0]?.id).toBe(model().activeActorId);
+  });
+
+  it('holds every living actor exactly once', () => {
+    /* The carousel splits ONE portrait across the seam, showing its two
+       halves at opposite edges. A ring that repeated an actor would put the
+       same face in two places at once and the split would stop reading as a
+       wrap. */
+    const ids = model().turnOrder.map((entry) => entry.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(5);
   });
 
   it('resolves turn-order names and sides as well as ids', () => {
@@ -100,24 +108,54 @@ describe('toHudModel', () => {
     });
   });
 
-  it('repeats a fast actor when the preview runs into the next round', () => {
-    /* The trap the turn-order bar has to survive: the preview is six long and
-       the round is five, so KIRA legitimately appears at both ends. Anything
-       marking "the current turn" by matching activeActorId would light both.
-       The current turn is index 0, positionally. */
-    const turnOrder = model().turnOrder;
+  it('ends on the actor who went immediately before the leader', () => {
+    /* THE PROPERTY THE SPLIT PORTRAIT RESTS ON. The carousel shows the last
+       ring entry twice -- half-dissolving off the left edge as "just went"
+       and half-dissolving in at the right as "next loop". Those can only be
+       one portrait if the tail is genuinely the previous actor, which is what
+       rotating (rather than forecasting) buys. */
+    const battle = createBattle(1337, makeRoster());
 
-    expect(turnOrder[0]?.id).toBe('kira');
-    expect(turnOrder[5]?.id).toBe('kira');
-    expect(turnOrder.filter((entry) => entry.id === 'kira')).toHaveLength(2);
-    expect(turnOrder[0]?.id).toBe(model().activeActorId);
+    /* VEX is up, so NEO went last. */
+    const midRound = model({ ...battle, turnIndex: 2 }).turnOrder;
+    expect(midRound[0]?.id).toBe('vex');
+    expect(midRound.at(-1)?.id).toBe('neo');
+
+    /* And at the top of a round it wraps: KIRA is up, APOLLYON closed the
+       previous round and will close this one too. */
+    const roundStart = model(battle).turnOrder;
+    expect(roundStart[0]?.id).toBe('kira');
+    expect(roundStart.at(-1)?.id).toBe('apollyon');
   });
 
-  it('drops a defeated actor rather than forecasting a turn that is skipped', () => {
-    /* advance() walks past a fallen actor when it picks the next turn, but
-       previewUpcoming slices the round's queue raw -- the queue is built once
-       per round and never edited. So without this filter VEX would sit in the
-       bar for the rest of the round advertising a turn she will not take. */
+  it('rotates by exactly one per turn and comes back round', () => {
+    const battle = createBattle(1337, makeRoster());
+    const ringAt = (turnIndex: number) =>
+      model({ ...battle, turnIndex }).turnOrder.map((entry) => entry.id);
+
+    const start = ringAt(0);
+    expect(start).toEqual(['kira', 'neo', 'vex', 'lyra', 'apollyon']);
+
+    /* Every index is the start rotated left by exactly that many places --
+       one step per turn, no skipping and no doubling back. */
+    for (let turn = 1; turn < start.length; turn++) {
+      expect(ringAt(turn), `turn ${turn}`).toEqual([
+        ...start.slice(turn),
+        ...start.slice(0, turn),
+      ]);
+    }
+
+    /* And a full lap of N rotations lands back on the order it started in --
+       which is what makes this a loop rather than a queue that runs out. */
+    const lap = start.reduce((order) => [...order.slice(1), order[0]!], start);
+    expect(lap).toEqual(start);
+  });
+
+  it('drops a defeated actor rather than promising a turn that is skipped', () => {
+    /* advance() walks past a fallen actor when it picks the next turn, but the
+       queue is built once per round and never edited. So without this filter
+       VEX would keep a place on the carousel for the rest of the round,
+       advertising a turn she will not take. */
     const base = createBattle(1, makeRoster());
     const felled: BattleState = {
       ...base,
@@ -127,9 +165,9 @@ describe('toHudModel', () => {
     const ids = model(felled).turnOrder.map((entry) => entry.id);
 
     expect(ids).not.toContain('vex');
-    /* And the bar SHORTENS rather than padding itself back to six. A short
-       bar is honest about a thinned party. */
-    expect(ids).toEqual(['kira', 'neo', 'lyra', 'apollyon', 'kira']);
+    /* The ring SHORTENS rather than padding itself back to five. Four
+       remaining turns honestly shown beats a duplicate keeping the count. */
+    expect(ids).toEqual(['kira', 'neo', 'lyra', 'apollyon']);
   });
 
   it('empties the turn order once the battle has ended', () => {
@@ -149,14 +187,29 @@ describe('toHudModel', () => {
     expect(hud.isLocked).toBe(true);
   });
 
-  it('renders the command level by default', () => {
-    expect(model().menuTitle).toBe('Command');
-    expect(model().options.map((option) => option.id)).toEqual([
+  it('renders the command level as a single active panel by default', () => {
+    const panels = model().panels;
+
+    expect(panels).toHaveLength(1);
+    expect(panels[0]).toMatchObject({
+      level: 'command',
+      title: 'Command',
+      cursor: 0,
+      isActive: true,
+    });
+    expect(panels[0]?.options.map((option) => option.id)).toEqual([
       'attack',
       'skill',
       'defend',
     ]);
-    expect(model().cursor).toBe(0);
+  });
+
+  it('labels ATTACK with the acting character own attack', () => {
+    /* KIRA is a knight, so the first command reads Scale Cleave. The id stays
+       'attack' -- only what the player reads changes. */
+    const attack = model().panels[0]?.options[0];
+    expect(attack?.id).toBe('attack');
+    expect(attack?.label).toBe('Scale Cleave');
   });
 
   /* ---------------------------------------------------------------- */

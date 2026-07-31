@@ -20,7 +20,8 @@
  * confirm therefore cannot be reached with an illegal selection.
  */
 
-import { SKILLS } from '../battle/actions';
+import { attackNameFor, skillsFor } from '../battle/classes';
+import { SKILLS } from '../battle/skills';
 import {
   isDefeated,
   type Action,
@@ -96,7 +97,14 @@ export function menuOptions(state: BattleState, menu: MenuState): MenuOption[] {
     case 'command':
       return COMMANDS.map((command) => ({
         id: command.id,
-        label: command.label,
+        /* ATTACK reads as the actor's own attack -- SCALE CLEAVE for the
+           knight, SHIV for the rogue. The id stays 'attack', so the testid
+           contract and every keyboard path are unchanged; only what the
+           player reads moves. */
+        label:
+          command.id === 'attack' && actor !== null
+            ? attackNameFor(actor)
+            : command.label,
         enabled: actor === null ? false : commandEnabled(state, actor, command.id),
         hint:
           command.id === 'skill' && actor !== null && !anySkillAffordable(actor)
@@ -105,12 +113,17 @@ export function menuOptions(state: BattleState, menu: MenuState): MenuOption[] {
       }));
 
     case 'skill':
-      return Object.values(SKILLS).map((skill) => ({
-        id: skill.id,
-        label: skill.name,
-        enabled: actor !== null && actor.mp >= skill.mpCost,
-        hint: `${skill.mpCost} MP`,
-      }));
+      /* This actor's list, not the whole table. A wizard cannot reach the
+         artificer's Repair Field, and the menu is where that is enforced --
+         takeAction would happily resolve it. */
+      return actor === null
+        ? []
+        : skillsFor(actor).map((skill) => ({
+            id: skill.id,
+            label: skill.name,
+            enabled: actor.mp >= skill.mpCost,
+            hint: `${skill.mpCost} MP`,
+          }));
 
     case 'target':
       return legalTargets(state, menu).map((target) => ({
@@ -134,7 +147,7 @@ function commandEnabled(state: BattleState, actor: Actor, command: CommandId): b
 }
 
 function anySkillAffordable(actor: Actor): boolean {
-  return Object.values(SKILLS).some((skill) => actor.mp >= skill.mpCost);
+  return skillsFor(actor).some((skill) => actor.mp >= skill.mpCost);
 }
 
 /**
@@ -342,9 +355,68 @@ function commandCursor(command: CommandId | null): number {
   return index === -1 ? 0 : index;
 }
 
+/* ------------------------------------------------------------------ */
+/* Panels                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface MenuPanel {
+  level: MenuLevel;
+  title: string;
+  options: readonly MenuOption[];
+  /** Index of the selected row: the live cursor if active, else the choice made. */
+  cursor: number;
+  /** Exactly one panel is active -- the one the arrow keys drive. */
+  isActive: boolean;
+}
+
+/**
+ * The menu as a cascade: the path taken, left to right.
+ *
+ * DERIVED, NOT STORED. Every parent panel's cursor is recoverable from
+ * MenuState -- the command level's from `command` (COMMANDS is a fixed list)
+ * and the skill level's from `skillCursor`, which already exists because
+ * backing out needs it. Keeping a stack of panels in state instead would be a
+ * second description of where the player is, free to disagree with the first.
+ *
+ * A target reached straight from ATTACK yields two panels, not three: there
+ * was no skill list on the way, and showing an empty one would invent a step
+ * the player never took.
+ */
+export function menuPanels(state: BattleState, menu: MenuState): MenuPanel[] {
+  const panel = (level: MenuLevel, cursor: number): MenuPanel => ({
+    level,
+    title: titleFor(level),
+    options: menuOptions(state, { ...menu, level }),
+    cursor,
+    isActive: level === menu.level,
+  });
+
+  const command = panel(
+    'command',
+    menu.level === 'command' ? menu.cursor : commandCursor(menu.command),
+  );
+
+  switch (menu.level) {
+    case 'command':
+      return [command];
+
+    case 'skill':
+      return [command, panel('skill', menu.cursor)];
+
+    case 'target':
+      return menu.command === 'skill'
+        ? [command, panel('skill', menu.skillCursor), panel('target', menu.cursor)]
+        : [command, panel('target', menu.cursor)];
+  }
+}
+
 /** Heading for the current level. Shown as the menu's title. */
 export function menuTitle(menu: MenuState): string {
-  switch (menu.level) {
+  return titleFor(menu.level);
+}
+
+function titleFor(level: MenuLevel): string {
+  switch (level) {
     case 'command':
       return 'Command';
     case 'skill':

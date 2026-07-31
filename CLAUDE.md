@@ -146,11 +146,29 @@ The chain is `keydown` → `ui/menu.ts` (pure) → `Action` →
 with `publishDebugState` fed from the same view so the DOM and
 `__debugState.battle` can never describe different moments.
 
-**Phase 5a/5b complete: the party cards and the turn-order bar are styled.**
-Four cards along the bottom -- portrait, name, level, HP and MP gauges, status
-badges -- and a row of portrait tiles top-left for the turn order, both built
-from the tokens in `style.css`. The command menu and the round/chain/phase
-strip are still bare; they are the next region passes.
+**Phase 5 complete: the HUD is built.** Party cards along the bottom, a
+portrait turn-order bar top-left, and a cascading command menu. Only the
+round/chain/phase strip is still bare.
+
+**Characters play differently now.** `battle/classes.ts` maps a `ClassName` to
+an attack name and a skill list; `battle/skills.ts` is the flat table those ids
+resolve against. The classes mirror the art in `CHARACTER_PROMPTS.md` -- kira
+knight, neo wizard, vex rogue, lyra artificer, apollyon aberration -- so
+changing one there means changing it here. Facts worth knowing:
+
+- **Skills compose the resolver's three primitives** (`power`+crit, `heal`,
+  `status`) and nothing else. A skill needing a fourth is a change to
+  `actions.ts` first and a table entry second.
+- **The menu is where a class boundary is enforced.** `takeAction` will happily
+  resolve any skill for any actor; `menuOptions` is what stops a knight
+  casting Repair Field.
+- **The boss has exactly one skill on purpose.** `chooseEnemyAction` takes two
+  rng draws, and a pick over a longer list would add a third and reroll every
+  seeded fight, screenshot baselines included.
+- **The current command is `panels[n].cursor`, and the menu cascades.**
+  `menuPanels` derives the parent panels from `MenuState` rather than storing
+  a stack. Only the active panel gets `aria-current`; a parent's chosen row is
+  `data-chosen`, or the menu reports being in two places at once.
 
 `renderHud` **builds its skeleton once and updates in place.** It used to
 `innerHTML = ''` and rebuild, which is why the boss bar's `transition: width
@@ -175,12 +193,36 @@ Card facts worth knowing before changing them:
 - **The cards and the turn tiles SHARE their state rules**, via grouped
   selectors (`.hud-card, .hud-turn`). One question, one visual language --
   splitting them apart is how the two regions drift.
-- **The current turn is `turnOrder[0]`, positionally.** The preview runs into
-  the next round, so a fast actor appears twice; marking by `activeActorId`
-  lights two tiles. Tested in both Vitest and Playwright.
+- **`turnOrder` is a RING, not a preview.** The round's queue rotated so the
+  active actor leads, each living actor once. That makes the last entry the
+  actor who went immediately before the leader — which is what lets the
+  carousel show one portrait split across the seam, half-dissolving off the
+  left edge as "just went" and half-dissolving in at the right as "next loop".
+- **The carousel's geometry is load-bearing.** Window is `N × pitch`, the
+  track is `N + 2` tiles where tile `i` shows ring position `(i - 2) mod N`,
+  and the resting offset is `-(tile/2 + pitch)`. The two extra tiles sit off
+  the left edge so the slide has something to bring in. Get the width wrong
+  and the split portrait becomes two unrelated crops.
+- **The slide never snaps back.** The track always renders the current ring
+  already at rest; `track.animate` only makes it *arrive*, running from
+  `rest + pitch` to `rest` with `composite: 'add'`. It finishes at the resting
+  style, so there is nothing to undo. Pitch is **measured** off two tiles —
+  an unregistered custom property computes to its literal `calc()`, so
+  reading `--turn-pitch` back would give `NaN` and silently skip the animation.
+- **The turn highlight is a fixed cursor**, not a state on a tile. It frames
+  the "now" slot and the portraits rotate underneath it. The window is grown
+  by `--turn-bleed` top and bottom or `overflow: hidden` shaves the reticle
+  down to two vertical bars.
 - **A HUD shot wants `scale`, not a bigger `viewport`.** The DOM is sized in
   rem, so enlarging the frame renders the same tile into more pixels of frame
   and makes it *smaller*. `viewport` is for scene shots like `boss_closeup`.
+  A shot can also carry `keys: [...]`, played after ready and before capture,
+  which is how `command_menu` gets a menu two levels deep.
+- **DOM-only e2e specs load with `?time=0`.** That renders one frame and halts
+  the animation loop. Headless Chromium has no GPU, so the scene rasterises in
+  software at 135-200ms a frame, and leaving the loop running made the suite
+  three times slower and intermittently timeout. The HUD stays fully live --
+  `publishDebugState` is fed from `refresh()` as well as from the loop.
 - **`--card-scale-active` is bounded by the strip's gap.** The active card
   grows by `transform`, so half the extra width crosses into its neighbour.
   At 1280 the 16px gap leaves 8.5px of clearance; raising the scale without

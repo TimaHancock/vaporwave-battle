@@ -97,6 +97,24 @@ async function main() {
         timeout: READY_TIMEOUT_MS,
       });
 
+      /*
+       * Optional keypresses, played after the scene is ready and before the
+       * capture.
+       *
+       * Every shot until now was of an untouched opening state, which is fine
+       * for the scene and useless for the interface: the command menu's whole
+       * subject is what it looks like two levels deep, and there is no URL
+       * parameter that opens it. Keys drive it exactly the way a player would,
+       * through the real handler.
+       *
+       * Determinism is unaffected. Menu navigation takes no rng draws and the
+       * shots that use it stop short of submitting an action, so the battle
+       * state at capture is the same one the seed produced.
+       */
+      for (const key of shot.keys ?? []) {
+        await page.keyboard.press(key);
+      }
+
       const state = await page.evaluate(() => window.__debugState);
 
       /* A clip is a crop of the canonical render, NOT a moved camera. The

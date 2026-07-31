@@ -12,7 +12,8 @@
  * in between. The seeded rng makes those swings reproducible.
  */
 
-import { SKILLS, takeAction } from './actions';
+import { takeAction } from './actions';
+import { skillsFor } from './classes';
 import { buildRound } from './turnOrder';
 import {
   isDefeated,
@@ -221,7 +222,6 @@ function nextLivingTurn(state: BattleState): BattleState {
  * which keeps the rng sequence stable as skills are re-costed.
  */
 const ENEMY_SKILL_CHANCE = 0.3;
-const ENEMY_SKILL_ID = 'pulse_strike';
 
 function chooseEnemyAction(state: BattleState, actor: Actor, rng: Rng): Action {
   const targets = state.actors.filter((a) => a.side === 'party' && !isDefeated(a));
@@ -232,12 +232,20 @@ function chooseEnemyAction(state: BattleState, actor: Actor, rng: Rng): Action {
     );
   }
 
-  const skill = SKILLS[ENEMY_SKILL_ID];
+  /* The enemy's OWN first skill, rather than a hardcoded id -- an enemy should
+     not be able to cast something outside its class.
+
+     Deliberately not a random pick from the list: this function takes exactly
+     two rng draws, and adding a third would shift every subsequent draw and
+     silently change every seeded fight, screenshot baselines included. The
+     aberration therefore carries one skill (classes.ts). Widening this is a
+     job for a policy that chooses deliberately, not for another draw. */
+  const skill = skillsFor(actor)[0];
   const canAfford = skill !== undefined && actor.mp >= skill.mpCost;
   const useSkill = canAfford && rng.chance(ENEMY_SKILL_CHANCE);
   const target = rng.pick(targets);
 
-  return useSkill
-    ? { kind: 'skill', skillId: ENEMY_SKILL_ID, targetId: target.id }
+  return useSkill && skill !== undefined
+    ? { kind: 'skill', skillId: skill.id, targetId: target.id }
     : { kind: 'attack', targetId: target.id };
 }

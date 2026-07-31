@@ -9,6 +9,7 @@ function actor(overrides: Partial<Actor> = {}): Actor {
     id: 'test',
     name: 'Test',
     side: 'party',
+    className: 'knight',
     level: 70,
     stats: { maxHp: 4200, maxMp: 450, attack: 300, defense: 120, speed: 100 },
     hp: 4200,

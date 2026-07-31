@@ -90,7 +90,10 @@ test.describe('HUD DOM channel', () => {
     const menu = page.getByTestId('command-menu');
     await expect(menu.getByRole('button')).toHaveCount(3);
 
-    for (const label of ['Attack', 'Skill', 'Defend']) {
+    /* "Scale Cleave", not "Attack": the first command is the acting
+       character's own attack, and the battle opens on KIRA, a knight. The
+       testid stays `command-attack` -- only the label is per-class. */
+    for (const label of ['Scale Cleave', 'Skill', 'Defend']) {
       await expect(menu.getByRole('button', { name: label })).toBeVisible();
     }
 

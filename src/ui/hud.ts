@@ -31,7 +31,6 @@
  * where one fits and otherwise render bare. No CSS was added.
  */
 
-import { previewUpcoming } from '../battle/turnOrder';
 import {
   findActor,
   isDefeated,
@@ -40,11 +39,8 @@ import {
   type Side,
   type Status,
 } from '../battle/types';
-import { menuOptions, menuTitle, type MenuOption, type MenuState } from './menu';
+import { menuPanels, type MenuPanel, type MenuState } from './menu';
 import { portraitFor } from './portraits';
-
-/** How many turns the order bar looks ahead. */
-export const TURN_PREVIEW_LENGTH = 6;
 
 /**
  * At or below this fraction of maximum HP, a party card's health bar switches
@@ -86,21 +82,35 @@ export interface HudModel {
   boss: { id: string; name: string; level: number; hp: number; maxHp: number };
   actors: readonly HudActor[];
   /**
-   * Upcoming turns, current actor first.
+   * THE ROUND AS A RING: every living actor exactly once, active first.
    *
-   * THE CURRENT TURN IS INDEX 0, NOT "whichever entry matches activeActorId".
-   * The preview runs past the end of the round into the next one, so a fast
-   * actor legitimately appears twice -- a 4+1 roster returns
-   * [kira, neo, vex, lyra, apollyon, kira]. Marking by id lights two tiles.
+   * Not a forecast. The turn-order bar is a carousel that rotates one place
+   * per turn and loops, so what it needs is a cycle rather than a lookahead --
+   * and a cycle is what a round already is.
+   *
+   * Two properties the carousel is built on:
+   *
+   *   - index 0 is the actor whose turn it is
+   *   - the LAST entry is the actor who acted immediately before them, and
+   *     also the last to act before the leader comes round again
+   *
+   * That second one is why a single portrait can be split across the seam,
+   * half-dissolving off the left edge as "just went" and half-dissolving in at
+   * the right as "next loop". They are the same character.
    */
   turnOrder: readonly { id: string; name: string; side: Side }[];
   round: number;
   chain: number;
   phase: BattleState['phase'];
   activeActorId: string | null;
-  menuTitle: string;
-  options: readonly MenuOption[];
-  cursor: number;
+  /**
+   * The command menu as a cascade -- the path taken, left to right.
+   *
+   * Exactly one panel is active. The rest are the choices already made, kept
+   * on screen so the player can see where they are rather than having to
+   * remember.
+   */
+  panels: readonly MenuPanel[];
   narration: string;
   isLocked: boolean;
 }
@@ -154,17 +164,23 @@ export function toHudModel(
         statuses: actor.statuses,
       };
     }),
-    /* DEFEATED ACTORS ARE DROPPED, and the bar shortens rather than padding.
-       `advance` walks past a fallen actor when it picks the next turn, but
-       previewUpcoming slices the round's queue raw -- the queue is built once
-       per round and never edited, which is what makes a mid-round speed
-       change safe. So a party member who falls stays in the raw preview for
-       the rest of the round, advertising a turn that will not happen.
-       Filtering here rather than there: which turns are worth SHOWING is a UI
-       question, and turnOrder.ts is deliberately not a UI module. */
+    /* The round's queue, rotated so the active actor leads. Rotating rather
+       than forecasting is what makes the last entry the previous actor, which
+       is the property the carousel's split portrait depends on.
+
+       DEFEATED ACTORS ARE DROPPED, and the ring shortens rather than padding.
+       `advance` walks past a fallen actor when it picks the next turn, but the
+       queue itself is built once per round and never edited -- that is what
+       makes a mid-round speed change safe. So without this filter a party
+       member who falls keeps a place on the carousel for the rest of the
+       round, advertising a turn that will not happen. Filtering here rather
+       than in turnOrder.ts: which turns are worth SHOWING is a UI question. */
     turnOrder:
       state.phase === 'in_progress'
-        ? previewUpcoming(state, TURN_PREVIEW_LENGTH)
+        ? [
+            ...state.turnQueue.slice(state.turnIndex),
+            ...state.turnQueue.slice(0, state.turnIndex),
+          ]
             .map((id) => findActor(state, id))
             .filter((actor): actor is Actor => actor !== undefined && !isDefeated(actor))
             .map((actor) => ({ id: actor.id, name: actor.name, side: actor.side }))
@@ -173,9 +189,7 @@ export function toHudModel(
     chain: state.chain,
     phase: state.phase,
     activeActorId,
-    menuTitle: menuTitle(menu),
-    options: menuOptions(state, menu),
-    cursor: menu.cursor,
+    panels: menuPanels(state, menu),
     narration: view.narration,
     isLocked: view.isLocked,
   };
@@ -247,15 +261,16 @@ function buildHud(root: HTMLElement, model: HudModel): HudView {
   const menu = buildCommandMenu();
   const narration = buildNarration();
 
-  root.append(
-    boss.el,
-    turnOrder.el,
-    party.el,
-    enemies.el,
-    status.el,
-    menu.el,
-    narration.el,
-  );
+  /* The narration and the menu share one positioned column rather than each
+     carrying its own `bottom`. The cascade is three panels wide when a skill
+     is being targeted, which ran straight under where the narration used to
+     sit -- and stacking by flex is what keeps them clear of each other when
+     the menu's height changes with its option count. */
+  const corner = document.createElement('div');
+  corner.className = 'hud-corner';
+  corner.append(narration.el, menu.el);
+
+  root.append(boss.el, turnOrder.el, party.el, enemies.el, status.el, corner);
 
   return {
     update(next: HudModel): void {
@@ -329,69 +344,159 @@ function buildBossBar(model: HudModel): Region {
 /* ------------------------------------------------------------------ */
 
 /**
- * The turn-order bar: portraits, left to right, next up first.
+ * The turn-order carousel.
  *
- * Deliberately just faces. A row of portraits is read at a glance where a
- * numbered list of names has to be parsed, and the bar's whole job is to be
- * glanced at. It wears the same selection cues as the party cards -- cyan
- * rule, cyan glow, larger -- because "whose turn is it" is one question and
- * should not have two visual languages.
+ * A ring of portraits that rotates one place per turn and loops. Four are
+ * shown whole; the fifth is split across the seam, half-dissolving off the
+ * left edge as the turn just taken and half-dissolving in at the right as the
+ * same character coming round again. Those two halves are one actor -- see
+ * HudModel.turnOrder for why the ring guarantees it.
  *
- * Slots are a REUSED POOL rather than a rebuild. The pool grows and shrinks
- * with the queue, so `turn-order-slot-<n>` is a stable element per position:
- * the bar stops churning on every narration beat, and the tiles can
- * transition. What moves between beats is which portrait is in which slot.
+ * THE GEOMETRY, because everything below depends on it
+ * ----------------------------------------------------
+ * With `pitch = tile + gap` and a ring of N:
+ *
+ *   window   N * pitch                 = half + (N-1) full + half
+ *   track    N + 2 tiles, where tile i shows ring position (i - 2) mod N
+ *   rest     translateX(-(tile/2 + pitch))
+ *
+ * The two extra tiles sit off the left edge at rest. They exist so the slide
+ * has something to bring in: shifting the resting track right by exactly one
+ * pitch reproduces the PREVIOUS turn's resting frame, which is what lets the
+ * animation start on the old picture and end on the new one with no seam.
+ *
+ * WHY THERE IS NO SNAP-BACK
+ * -------------------------
+ * The usual way to loop a carousel is to animate past the end and then jump
+ * the transform back, which then has to be hidden. Instead the track always
+ * renders the CURRENT ring already at its resting offset; the animation only
+ * makes it arrive, running from `rest + pitch` to `rest`. It finishes at the
+ * resting style, so there is nothing to undo.
  */
 function buildTurnOrder(): Region {
-  const el = document.createElement('ol');
+  /* The window. Masked, clipped, and the element the testid names -- the
+     track is N+2 tiles wide and translated, so ITS box is not what the bar
+     occupies on screen, and a layout assertion against it would be wrong. */
+  const el = document.createElement('div');
   el.className = 'hud-turn-order';
   el.dataset['testid'] = 'turn-order';
-  el.setAttribute('aria-label', 'Turn order');
+
+  const track = document.createElement('ol');
+  track.className = 'hud-turn-order__track';
+  track.setAttribute('aria-label', 'Turn order');
+
+  /* The highlight does not move. It is a reticle pinned over the "now" slot,
+     and the portraits rotate underneath it into place. Decorative: slot 0
+     already carries data-current for anything that needs to know. */
+  const cursor = document.createElement('div');
+  cursor.className = 'hud-turn-order__cursor';
+  cursor.dataset['testid'] = 'turn-order-cursor';
+  cursor.setAttribute('aria-hidden', 'true');
+
+  el.append(track, cursor);
 
   const pool: TurnSlot[] = [];
+  /** The leader last rendered. A change in it is what a turn advancing means. */
+  let leader: string | null = null;
 
   return {
     el,
     update(next: HudModel): void {
-      const entries = next.turnOrder;
+      const ring = next.turnOrder;
+      const tiles = ring.length === 0 ? 0 : ring.length + 2;
 
-      while (pool.length < entries.length) {
-        pool.push(buildTurnSlot(pool.length));
-      }
-      /* Detached rather than hidden. An empty tile still reads as a turn, and
-         the queue really is empty once the battle has ended. */
-      for (let i = entries.length; i < pool.length; i++) {
-        pool[i]!.el.remove();
+      el.style.setProperty('--turn-slots', String(ring.length));
+
+      while (pool.length < tiles) pool.push(buildTurnSlot());
+      for (let i = tiles; i < pool.length; i++) pool[i]!.el.remove();
+
+      for (let i = 0; i < tiles; i++) {
+        /* (i - 2) mod N: the first two tiles are the lead-ins, duplicating
+           the ring's tail so the slide has content to bring in from the left.
+           They are aria-hidden -- without that a screen reader reads two of
+           the characters twice. */
+        const position = (((i - 2) % ring.length) + ring.length) % ring.length;
+        const slot = pool[i]!;
+        slot.update(ring[position]!, i, position);
+        if (slot.el.parentNode === null) track.append(slot.el);
       }
 
-      entries.forEach((entry, index) => {
-        const slot = pool[index]!;
-        /* Index 0 is the current turn -- see HudModel.turnOrder for why this
-           cannot be a match against activeActorId. */
-        slot.update(entry, index === 0);
-        if (slot.el.parentNode === null) el.append(slot.el);
-      });
+      const nextLeader = ring[0]?.id ?? null;
+      if (leader !== null && nextLeader !== null && nextLeader !== leader) {
+        slideOnePlace(track);
+      }
+      leader = nextLeader;
     },
   };
 }
 
-interface TurnSlot {
-  el: HTMLElement;
-  update(entry: HudModel['turnOrder'][number], isCurrent: boolean): void;
+/**
+ * Bring the track in from one place to the right.
+ *
+ * Web Animations rather than a CSS transition, deliberately. A transition
+ * needs a previous value to move FROM, and by the time this runs the element
+ * is already at its destination -- the content was rendered at its resting
+ * offset. Saying "arrive from over there" in CSS means writing the start
+ * position, forcing a reflow, then writing the end position; `animate()` says
+ * it directly. Without `fill`, it releases itself when it finishes.
+ */
+function slideOnePlace(track: HTMLElement): void {
+  if (typeof track.animate !== 'function') return;
+  /* Motion, not state: a reduced-motion preference means the carousel should
+     land on the new order rather than travel to it. */
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  /* MEASURED, not read from --turn-pitch. An unregistered custom property
+     computes to its literal token stream, so getPropertyValue would hand back
+     "calc(2.25rem + 0.5rem)" and parseFloat would give NaN -- the animation
+     would silently never run. Two adjacent tiles give the real pitch in px,
+     including whatever the gap actually resolved to. */
+  const [first, second] = track.children;
+  if (!(first instanceof HTMLElement) || !(second instanceof HTMLElement)) return;
+  const pitch = second.offsetLeft - first.offsetLeft;
+  if (!Number.isFinite(pitch) || pitch <= 0) return;
+
+  const styles = getComputedStyle(track);
+
+  track.animate(
+    [{ transform: `translateX(${pitch}px)` }, { transform: 'translateX(0)' }],
+    {
+      /* Read from the token rather than restated, so the carousel and the
+         party cards cannot drift out of step. They are one motion language. */
+      duration: durationOf(styles.getPropertyValue('--card-motion')),
+      easing: 'ease-in-out',
+      composite: 'add',
+    },
+  );
 }
 
-function buildTurnSlot(index: number): TurnSlot {
+/** Parses a CSS time token. Falls back to the card motion's authored value. */
+function durationOf(value: string): number {
+  const trimmed = value.trim();
+  const amount = Number.parseFloat(trimmed);
+  if (!Number.isFinite(amount)) return 300;
+  return trimmed.endsWith('ms') ? amount : amount * 1000;
+}
+
+interface TurnSlot {
+  el: HTMLElement;
+  update(
+    entry: HudModel['turnOrder'][number],
+    trackIndex: number,
+    ringPosition: number,
+  ): void;
+}
+
+function buildTurnSlot(): TurnSlot {
   const el = document.createElement('li');
   el.className = 'hud-turn';
-  el.dataset['testid'] = `turn-order-slot-${index}`;
 
   const portrait = document.createElement('span');
   portrait.className = 'hud-turn__portrait';
 
   /* The name stays in the DOM, off-screen. It keeps the tile's accessible
-     name, keeps the <ol> readable as a list of characters rather than a list
-     of blanks, and keeps each item's textContent equal to the character name
-     -- which is what the id/name pair in the old bare row was for. */
+     name, keeps the list readable as characters rather than as blanks, and
+     keeps each item's textContent equal to the character name. */
   const name = document.createElement('span');
   name.className = 'hud-sr-only';
 
@@ -399,7 +504,19 @@ function buildTurnSlot(index: number): TurnSlot {
 
   return {
     el,
-    update(entry, isCurrent): void {
+    update(entry, trackIndex, ringPosition): void {
+      const isLead = trackIndex < 2;
+
+      /* Testids index the RING, not the track, so `turn-order-slot-0` still
+         means "whose turn it is" -- the meaning it has always had. The
+         lead-ins are duplicates and get their own name. */
+      setAttr(
+        el,
+        'data-testid',
+        isLead ? `turn-order-lead-${trackIndex}` : `turn-order-slot-${ringPosition}`,
+      );
+      toggleAttr(el, 'aria-hidden', isLead);
+
       if (el.dataset['actor'] !== entry.id) {
         /* The id is what a test joins against an ActorId; the side answers
            "is the boss up next" without anyone parsing a portrait. */
@@ -408,7 +525,7 @@ function buildTurnSlot(index: number): TurnSlot {
         setText(name, entry.name);
         applyPortrait(portrait, entry.id);
       }
-      toggleAttr(el, 'data-current', isCurrent);
+      toggleAttr(el, 'data-current', !isLead && ringPosition === 0);
     },
   };
 }
@@ -742,20 +859,24 @@ const PHASE_LABELS: Record<BattleState['phase'], string> = {
 /* Command menu                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The command menu, as a cascade of panels.
+ *
+ * One panel per level the player has walked through, left to right, with the
+ * active one lit and its parents dimmed. Seeing the path beats remembering it,
+ * and it is what makes ATTACK -> a target and SKILL -> a skill -> a target
+ * legible as different depths rather than as two identical lists.
+ *
+ * The panel ROW persists; each panel's contents are rebuilt on update. Panels
+ * come and go with the level and their options change identity and count, so
+ * there is nothing stable to reconcile -- and unlike the gauges, none of it
+ * animates.
+ */
 function buildCommandMenu(): Region {
   const el = document.createElement('nav');
   el.className = 'hud-menu';
   el.dataset['testid'] = 'command-menu';
   el.setAttribute('aria-label', 'Battle commands');
-
-  const heading = document.createElement('h2');
-  heading.className = 'hud-menu__title';
-  heading.dataset['testid'] = 'menu-title';
-
-  const list = document.createElement('ul');
-  list.className = 'hud-menu__list';
-
-  el.append(heading, list);
 
   return {
     el,
@@ -764,47 +885,71 @@ function buildCommandMenu(): Region {
          while it plays out. It is announced so a screen reader does not
          report a menu as interactive when it is not. */
       setAttr(el, 'aria-disabled', next.isLocked ? 'true' : 'false');
-      setText(heading, next.menuTitle);
 
-      /* Rebuilt wholesale, as before. The options change identity and count
-         with the menu level -- command, skill, target -- so there is nothing
-         stable to update in place, and none of it animates. */
-      list.replaceChildren();
-
-      next.options.forEach((option, index) => {
-        const item = document.createElement('li');
-        const selected = index === next.cursor;
-
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'hud-menu__item';
-        button.dataset['testid'] =
-          `${TESTID_PREFIX[next.menuTitle] ?? 'option'}-${option.id}`;
-        button.textContent =
-          option.hint === undefined
-            ? option.label
-            : `${option.label} (${option.hint})`;
-        button.setAttribute('aria-current', selected ? 'true' : 'false');
-        button.disabled = !option.enabled || next.isLocked;
-        if (selected) button.classList.add('is-selected');
-
-        item.append(button);
-        list.append(item);
-      });
+      el.replaceChildren(
+        ...next.panels.map((panel) => renderPanel(panel, next.isLocked)),
+      );
     },
   };
 }
 
-/**
- * Testid prefix per menu level.
- *
- * Keyed off the rendered title rather than the MenuState so renderHud stays
- * a pure function of HudModel -- it never reaches back into menu state.
- */
-const TESTID_PREFIX: Record<string, string> = {
-  Command: 'command',
-  Skill: 'skill',
-  Target: 'target',
+function renderPanel(panel: MenuPanel, isLocked: boolean): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'hud-menu__panel';
+  el.dataset['testid'] = `menu-panel-${panel.level}`;
+  if (panel.isActive) el.dataset['active'] = 'true';
+
+  const heading = document.createElement('h2');
+  heading.className = 'hud-menu__title';
+  /* menu-title names the ACTIVE level, and only one panel is active -- so it
+     stays the single element it has always been, and the assertions that read
+     it keep meaning "where is the player now". */
+  if (panel.isActive) heading.dataset['testid'] = 'menu-title';
+  heading.textContent = panel.title;
+
+  const list = document.createElement('ul');
+  list.className = 'hud-menu__list';
+
+  panel.options.forEach((option, index) => {
+    const item = document.createElement('li');
+    const selected = index === panel.cursor;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'hud-menu__item';
+    button.dataset['testid'] = `${TESTID_PREFIX[panel.level]}-${option.id}`;
+    button.textContent =
+      option.hint === undefined ? option.label : `${option.label} (${option.hint})`;
+
+    if (selected) button.classList.add('is-selected');
+
+    if (panel.isActive) {
+      button.setAttribute('aria-current', selected ? 'true' : 'false');
+      button.disabled = !option.enabled || isLocked;
+    } else {
+      /* A parent panel records the choice already made, but it is NOT the
+         current position -- two aria-current="true" in one nav is a menu that
+         reports being in two places. And nothing in a dimmed panel is
+         actionable, so it must not collect a Tab stop either: the arrow keys
+         cannot reach it. */
+      button.setAttribute('aria-current', 'false');
+      if (selected) button.dataset['chosen'] = 'true';
+      button.disabled = true;
+    }
+
+    item.append(button);
+    list.append(item);
+  });
+
+  el.append(heading, list);
+  return el;
+}
+
+/** Testid prefix per menu level. The values are a contract with the suite. */
+const TESTID_PREFIX: Record<MenuPanel['level'], string> = {
+  command: 'command',
+  skill: 'skill',
+  target: 'target',
 };
 
 /* ------------------------------------------------------------------ */

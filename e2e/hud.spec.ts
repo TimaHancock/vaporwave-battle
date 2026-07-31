@@ -23,8 +23,23 @@ test.use({ viewport: { width: 1280, height: 720 } });
 /** The four party members, in formation order. */
 const PARTY = ['kira', 'neo', 'vex', 'lyra'] as const;
 
+/**
+ * `time=0` is doing real work here: it renders ONE frame and halts the
+ * animation loop.
+ *
+ * Headless Chromium has no GPU, so the scene runs through SwiftShader at
+ * roughly 135-200ms a frame. Every test in this file is about the DOM, and
+ * leaving the loop running means each one spends its whole life competing
+ * with the others for CPU spent rasterising a scene it never looks at --
+ * which is what pushed tests from 4s solo to 60s under a parallel run.
+ *
+ * The HUD stays completely live: publishDebugState is fed from refresh() as
+ * well as from the render loop, precisely so step mode does not freeze the
+ * interface. Keyboard input, the sequencer and the debug channel all behave
+ * exactly as they do with the loop running.
+ */
 async function ready(page: Page, query = ''): Promise<void> {
-  await page.goto(`/?seed=1337${query}`);
+  await page.goto(`/?seed=1337&time=0${query}`);
   await page.waitForFunction(() => window.__debugState?.battle != null);
 }
 
@@ -241,105 +256,163 @@ test.describe('the active card stands out', () => {
 });
 
 /**
- * The turn-order bar: portraits only, next up first.
+ * The turn-order carousel.
  *
- * It shares its selection cues with the party cards by sharing their CSS
- * rules, so these tests assert the cues on the BAR independently -- if someone
- * splits the grouped selectors apart later, the cards would still pass their
- * own tests while the bar quietly went plain.
+ * A ring of the round's actors that rotates one place per turn and loops. Four
+ * portraits show whole; the fifth is split across the seam, half-dissolving at
+ * each edge.
+ *
+ * The geometry is the part that can be wrong while still looking plausible in
+ * a screenshot, so most of what follows measures boxes rather than reading
+ * attributes: the window has to be exactly the ring's width, and the fixed
+ * cursor has to land exactly on the active portrait.
  */
-test.describe('the turn-order bar', () => {
-  /** The opening preview: one round of five, then it wraps back to KIRA. */
-  const OPENING = ['kira', 'neo', 'vex', 'lyra', 'apollyon', 'kira'] as const;
+test.describe('the turn-order carousel', () => {
+  /** The opening round, in speed order. */
+  const RING = ['kira', 'neo', 'vex', 'lyra', 'apollyon'] as const;
 
-  test('shows a portrait per upcoming turn, in order', async ({ page }) => {
+  /** Waits out the slide, which runs for --card-motion after a turn lands. */
+  async function settled(page: Page): Promise<void> {
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('.hud-turn-order__track')
+          ?.getAnimations()
+          .every((animation) => animation.playState !== 'running') ?? true,
+    );
+  }
+
+  test('shows the round as a ring, each actor once, active first', async ({
+    page,
+  }) => {
     await ready(page);
 
-    const bar = page.getByTestId('turn-order');
-    await expect(bar.locator('li')).toHaveCount(OPENING.length);
-
-    for (const [index, id] of OPENING.entries()) {
-      const slot = page.getByTestId(`turn-order-slot-${index}`);
+    for (const [position, id] of RING.entries()) {
+      const slot = page.getByTestId(`turn-order-slot-${position}`);
       await expect(slot).toHaveAttribute('data-actor', id);
 
-      /* Each tile carries that actor's own art. A single shared or stale
-         portrait would still pass a count assertion. */
+      /* Each tile carries that actor's own art. A shared or stale portrait
+         would still pass a count assertion. */
       const image = await slot
         .locator('.hud-turn__portrait')
         .evaluate((el) => getComputedStyle(el).backgroundImage);
-      expect(image, `slot ${index} portrait`).toContain(`${id}.png`);
+      expect(image, `slot ${position} portrait`).toContain(`${id}.png`);
+    }
+
+    /* No slot 5. The ring is a cycle, not a lookahead that repeats the
+       leader at the far end. */
+    await expect(page.getByTestId('turn-order-slot-5')).toHaveCount(0);
+  });
+
+  test('carries two lead-in tiles, hidden from assistive tech', async ({ page }) => {
+    await ready(page);
+
+    /* The track runs N+2 wide: the two extra tiles sit off the left edge at
+       rest and exist so the slide has something to bring in. They duplicate
+       the ring's tail, so they must not be announced -- otherwise a screen
+       reader reads two of the five characters twice. */
+    await expect(page.getByTestId('turn-order').locator('li')).toHaveCount(
+      RING.length + 2,
+    );
+
+    for (const [index, id] of [
+      ['0', 'lyra'],
+      ['1', 'apollyon'],
+    ] as const) {
+      const lead = page.getByTestId(`turn-order-lead-${index}`);
+      await expect(lead).toHaveAttribute('data-actor', id);
+      await expect(lead).toHaveAttribute('aria-hidden', 'true');
     }
   });
 
   test('keeps the character name readable to a screen reader', async ({ page }) => {
     await ready(page);
 
-    /* The names are off-screen, not deleted -- otherwise the list announces
-       as six blank items. */
     await expect(page.getByTestId('turn-order-slot-0')).toHaveText('KIRA');
-    await expect(page.getByTestId('turn-order')).toHaveAttribute(
+    await expect(page.getByTestId('turn-order').locator('ol')).toHaveAttribute(
       'aria-label',
       'Turn order',
     );
   });
 
-  test('marks the current turn once, even though KIRA appears twice', async ({
+  test('is exactly the ring wide, so one portrait straddles the seam', async ({
     page,
   }) => {
     await ready(page);
 
-    /* THE TRAP THIS BAR HAS TO SURVIVE. The preview is six long and the round
-       is five, so KIRA is at both index 0 and index 5. Marking the current
-       turn by matching activeActorId lights both tiles. */
-    await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
-      'data-actor',
-      'kira',
-    );
-    await expect(page.getByTestId('turn-order-slot-5')).toHaveAttribute(
-      'data-actor',
-      'kira',
-    );
+    const window = (await page.getByTestId('turn-order').boundingBox())!;
+    const first = (await page.getByTestId('turn-order-slot-0').boundingBox())!;
+    const second = (await page.getByTestId('turn-order-slot-1').boundingBox())!;
+    const pitch = second.x - first.x;
 
-    const current = page.locator('[data-testid^="turn-order-slot-"][data-current]');
-    await expect(current).toHaveCount(1);
-    await expect(current).toHaveAttribute('data-testid', 'turn-order-slot-0');
+    /* half + (N-1) full + half is exactly N pitches. Get this wrong and the
+       split portrait stops being one character across a seam and becomes two
+       arbitrary crops. */
+    expect(window.width).toBeCloseTo(RING.length * pitch, 0);
+
+    /* And the tail entry really does show at both edges: its left copy hangs
+       half off the window's start, its right copy half off the end. */
+    const tail = (await page.getByTestId(`turn-order-slot-${RING.length - 1}`).boundingBox())!;
+    expect(tail.x + tail.width).toBeGreaterThan(window.x + window.width);
+    expect(tail.x).toBeLessThan(window.x + window.width);
+
+    const lead = (await page.getByTestId('turn-order-lead-1').boundingBox())!;
+    expect(lead.x, 'lead-in hangs off the left edge').toBeLessThan(window.x);
+    expect(lead.x + lead.width).toBeGreaterThan(window.x);
   });
 
-  test('wears the same cyan-on-magenta cue as the party cards', async ({ page }) => {
+  test('pins the cursor exactly over the active portrait', async ({ page }) => {
     await ready(page);
 
-    const leading = channels(await slotStyle(page, 0, 'border-top-color'));
-    const waiting = channels(await slotStyle(page, 1, 'border-top-color'));
+    const cursor = (await page.getByTestId('turn-order-cursor').boundingBox())!;
+    const active = (await page.getByTestId('turn-order-slot-0').boundingBox())!;
 
-    expect(leading.b, 'leading tile is cyan-dominant').toBeGreaterThan(leading.r);
-    expect(waiting.r, 'waiting tile is magenta-dominant').toBeGreaterThan(
-      waiting.b,
-    );
+    /* THE ASSERTION THE WHOLE GEOMETRY RESTS ON. The cursor never moves; the
+       portraits rotate under it. If the resting offset and the cursor's
+       left edge disagree by even a few pixels the highlight sits between two
+       faces, and a static screenshot makes that look almost right. */
+    expect(cursor.x + cursor.width / 2).toBeCloseTo(active.x + active.width / 2, 0);
+    expect(cursor.y + cursor.height / 2).toBeCloseTo(active.y + active.height / 2, 0);
+    /* A reticle around the portrait, not a border on it. */
+    expect(cursor.width).toBeGreaterThan(active.width);
+  });
 
-    /* And it is the SAME cyan the active card uses, not a second one that
-       happens to also be blue. */
-    expect(await slotStyle(page, 0, 'border-top-color')).toBe(
+  test('the cursor wears the same cyan as the active card, tiles stay magenta', async ({
+    page,
+  }) => {
+    await ready(page);
+
+    const cursor = channels(await computed(page, 'turn-order-cursor', 'border-top-color'));
+    const tile = channels(await slotStyle(page, 1, 'border-top-color'));
+
+    expect(cursor.b, 'cursor is cyan-dominant').toBeGreaterThan(cursor.r);
+    expect(tile.r, 'a waiting tile is magenta-dominant').toBeGreaterThan(tile.b);
+
+    /* The SAME cyan the active card uses, not a second one that happens to
+       also be blue -- they share a CSS rule and this is what says so. */
+    expect(await computed(page, 'turn-order-cursor', 'border-top-color')).toBe(
       await cardStyle(page, 'kira', 'border-top-color'),
     );
   });
 
-  test('the leading tile is drawn larger, and the queue advances', async ({
-    page,
-  }) => {
+  test('rotates one place per turn, and the cursor does not move', async ({ page }) => {
     await ready(page);
-
-    const leadingBox = (await page.getByTestId('turn-order-slot-0').boundingBox())!;
-    const waitingBox = (await page.getByTestId('turn-order-slot-1').boundingBox())!;
-    expect(leadingBox.width / waitingBox.width).toBeGreaterThan(1.05);
+    const before = (await page.getByTestId('turn-order-cursor').boundingBox())!;
 
     await page.keyboard.press('Enter');
     await idle(page);
+    await settled(page);
 
-    /* The whole queue shifts left by one; the tile that is lit stays slot 0. */
+    /* The ring has turned by one: NEO leads and KIRA has gone to the tail,
+       where the split portrait lives. */
     await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
       'data-actor',
       'neo',
     );
+    await expect(
+      page.getByTestId(`turn-order-slot-${RING.length - 1}`),
+    ).toHaveAttribute('data-actor', 'kira');
+
     await expect(
       page.locator('[data-testid^="turn-order-slot-"][data-current]'),
     ).toHaveCount(1);
@@ -347,6 +420,52 @@ test.describe('the turn-order bar', () => {
       'data-current',
       'true',
     );
+
+    /* The highlight is a fixed frame: the portraits travelled, it did not. */
+    const after = (await page.getByTestId('turn-order-cursor').boundingBox())!;
+    expect(after.x).toBeCloseTo(before.x, 0);
+  });
+
+  test('slides on a turn change, timed with the party cards', async ({ page }) => {
+    await ready(page);
+
+    /* Recorded at the call rather than caught in flight. The turn does not
+       advance until the sequencer has played its beats, and the slide then
+       lasts only --card-motion -- polling for a live animation is a race
+       against a 300ms window. Wrapping animate() captures exactly what the
+       carousel ASKED for, which is the thing worth pinning. */
+    await page.evaluate(() => {
+      const track = document.querySelector('.hud-turn-order__track');
+      if (track === null) throw new Error('no carousel track to observe');
+      const recorded: KeyframeAnimationOptions[] = [];
+      (window as unknown as Record<string, unknown>)['__slides'] = recorded;
+
+      const original = track.animate.bind(track);
+      track.animate = ((keyframes: Keyframe[], options: KeyframeAnimationOptions) => {
+        recorded.push(options);
+        return original(keyframes, options);
+      }) as Element['animate'];
+    });
+
+    await page.keyboard.press('Enter');
+    await idle(page);
+    await settled(page);
+
+    const slides = await page.evaluate(
+      () =>
+        (window as unknown as Record<string, KeyframeAnimationOptions[] | undefined>)[
+          '__slides'
+        ] ?? [],
+    );
+
+    expect(slides.length, 'one slide per turn advanced').toBe(1);
+    /* Read from --card-motion, so the carousel and the cards cannot drift out
+       of step -- they are one motion language. */
+    const cardMotion = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--card-motion').trim(),
+    );
+    expect(`${slides[0]!.duration}ms`).toBe(cardMotion);
+    expect(slides[0]!.easing).toBe('ease-in-out');
   });
 
   test('records which side each turn belongs to', async ({ page }) => {
@@ -354,10 +473,9 @@ test.describe('the turn-order bar', () => {
 
     /* "Is the boss up next" is the question the bar exists to answer, and a
        test should be able to ask it without recognising a portrait. */
-    await expect(page.getByTestId('turn-order-slot-4')).toHaveAttribute(
-      'data-side',
-      'enemy',
-    );
+    await expect(
+      page.getByTestId(`turn-order-slot-${RING.indexOf('apollyon')}`),
+    ).toHaveAttribute('data-side', 'enemy');
     await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
       'data-side',
       'party',
@@ -367,12 +485,35 @@ test.describe('the turn-order bar', () => {
   test('does not collide with the boss bar', async ({ page }) => {
     await ready(page);
 
+    /* Measured on the WINDOW, not the track -- the track is N+2 tiles wide
+       and translated, so its box is not what the carousel occupies. */
     const bar = (await page.getByTestId('turn-order').boundingBox())!;
     const boss = (await page.getByTestId('boss-bar').boundingBox())!;
 
     expect(bar.x + bar.width, 'turn order right edge vs boss bar').toBeLessThan(
       boss.x,
     );
+  });
+
+  test.describe('with reduced motion requested', () => {
+    test('lands on the new order instead of travelling to it', async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await ready(page);
+
+      await page.keyboard.press('Enter');
+      const running = await page
+        .locator('.hud-turn-order__track')
+        .evaluate((el) => el.getAnimations().length);
+
+      /* Motion, not state: the carousel still rotates, it just does not
+         travel. */
+      expect(running).toBe(0);
+      await idle(page);
+      await expect(page.getByTestId('turn-order-slot-0')).toHaveAttribute(
+        'data-actor',
+        'neo',
+      );
+    });
   });
 });
 
@@ -475,19 +616,18 @@ test.describe('cards track the battle', () => {
   test('spending MP moves the MP bar, not just the text', async ({ page }) => {
     await ready(page);
 
-    /* SKILL -> repair_field, an ally-targeted heal that costs 20 MP. */
+    /* SKILL -> bulwark_protocol, the knight's ally-targeted guard, 12 MP. */
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
-    await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     await page.keyboard.press('Enter');
     await idle(page);
 
-    await expect(page.getByTestId('actor-kira-mp')).toHaveText('100/120');
+    await expect(page.getByTestId('actor-kira-mp')).toHaveText('108/120');
     await expect(page.getByTestId('actor-kira-mp-bar')).toHaveAttribute(
       'aria-valuenow',
-      '100',
+      '108',
     );
   });
 
@@ -507,6 +647,174 @@ test.describe('cards track the battle', () => {
        reads, and what e2e/battle.spec.ts already asserts on this element.
        Move the glyph into the text and this fails immediately. */
     await expect(page.getByTestId('actor-kira-statuses')).toHaveText('DEF_UP');
+  });
+});
+
+/**
+ * The command menu, as a cascade.
+ *
+ * Two things are on trial. First that the path stays on screen -- the parent
+ * panel visible and inert while its child is live. Second that the selected
+ * row obeys the palette rule: cyan is a thin line accent and never a fill,
+ * which this menu violated for three phases by painting the whole selected
+ * row `var(--signal)`.
+ */
+test.describe('the command menu', () => {
+  /** COMMAND -> SKILL, leaving the command panel behind as a parent. */
+  async function openSkills(page: Page): Promise<void> {
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('menu-panel-skill')).toBeVisible();
+  }
+
+  test('opens as a single panel of the acting character commands', async ({
+    page,
+  }) => {
+    await ready(page);
+
+    await expect(page.getByTestId('menu-panel-command')).toHaveAttribute(
+      'data-active',
+      'true',
+    );
+    await expect(page.getByTestId('menu-panel-skill')).toHaveCount(0);
+    await expect(page.getByTestId('menu-panel-target')).toHaveCount(0);
+
+    /* The knight's cleave, not the word ATTACK -- and the testid is unchanged,
+       which is what keeps every keyboard path working. */
+    await expect(page.getByTestId('command-attack')).toHaveText('Scale Cleave');
+  });
+
+  test('keeps the parent panel on screen, inert, while a child is open', async ({
+    page,
+  }) => {
+    await ready(page);
+    await openSkills(page);
+
+    const parent = page.getByTestId('menu-panel-command');
+    await expect(parent).toBeVisible();
+    await expect(parent).not.toHaveAttribute('data-active', 'true');
+    await expect(page.getByTestId('menu-panel-skill')).toHaveAttribute(
+      'data-active',
+      'true',
+    );
+
+    /* The parent records the choice that got you here, and nothing in it is
+       actionable -- the arrow keys cannot reach it, so it must not collect a
+       Tab stop either. */
+    await expect(page.getByTestId('command-skill')).toHaveAttribute(
+      'data-chosen',
+      'true',
+    );
+    await expect(page.getByTestId('command-skill')).toBeDisabled();
+  });
+
+  test('reports exactly one current row across the whole menu', async ({ page }) => {
+    await ready(page);
+    await openSkills(page);
+
+    /* Two aria-current="true" would be a menu claiming to be in two places.
+       The parent's chosen row uses data-chosen precisely so it does not
+       compete. */
+    const menu = page.getByTestId('command-menu');
+    await expect(menu.locator('[aria-current="true"]')).toHaveCount(1);
+    await expect(page.getByTestId('skill-ember_lance')).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
+  });
+
+  test('names only the active level in menu-title', async ({ page }) => {
+    await ready(page);
+    await expect(page.getByTestId('menu-title')).toHaveText('Command');
+
+    await openSkills(page);
+    /* Three headings are rendered now where one used to be, so this staying
+       single and naming where the player IS is the contract. */
+    await expect(page.getByTestId('menu-title')).toHaveCount(1);
+    await expect(page.getByTestId('menu-title')).toHaveText('Skill');
+  });
+
+  test('cascades left to right, each panel clear of the last', async ({ page }) => {
+    await ready(page);
+    await openSkills(page);
+
+    const command = (await page.getByTestId('menu-panel-command').boundingBox())!;
+    const skill = (await page.getByTestId('menu-panel-skill').boundingBox())!;
+
+    expect(skill.x, 'skill panel starts right of the command panel').toBeGreaterThanOrEqual(
+      command.x + command.width,
+    );
+  });
+
+  test('marks the selected row with cyan as a LINE, never a fill', async ({ page }) => {
+    await ready(page);
+
+    const selected = page.getByTestId('command-attack');
+    const style = await selected.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { background: s.backgroundColor, shadow: s.boxShadow, colour: s.color };
+    });
+
+    /* THE PALETTE RULE, asserted rather than trusted. This row used to be
+       `background: var(--signal)` -- a solid cyan bar, the one thing
+       CLAUDE.md says cyan must never be. */
+    const fill = channels(style.background);
+    expect(fill.b, 'selected row background is not cyan').not.toBeGreaterThan(
+      Math.max(fill.r, 1) * 1.5,
+    );
+
+    /* The cyan is on the edge and in the text instead. */
+    expect(style.shadow, 'a cyan inset rule').toContain('inset');
+    const text = channels(style.colour);
+    expect(text.b, 'selected row text is cyan').toBeGreaterThan(text.r);
+  });
+
+  test('the active panel wears the same cyan rule as the cards', async ({ page }) => {
+    await ready(page);
+    await openSkills(page);
+
+    const active = channels(await computed(page, 'menu-panel-skill', 'border-top-color'));
+    const parent = channels(
+      await computed(page, 'menu-panel-command', 'border-top-color'),
+    );
+
+    expect(active.b, 'active panel is cyan-dominant').toBeGreaterThan(active.r);
+    expect(parent.r, 'parent panel is magenta-dominant').toBeGreaterThan(parent.b);
+  });
+
+  test('shows three panels for a target reached through a skill', async ({ page }) => {
+    await ready(page);
+    await openSkills(page);
+
+    /* bulwark_protocol is ally-targeted, so a real target list opens. */
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+
+    for (const level of ['command', 'skill', 'target']) {
+      await expect(page.getByTestId(`menu-panel-${level}`)).toBeVisible();
+    }
+    await expect(page.getByTestId('menu-title')).toHaveText('Target');
+
+    /* Escape unwinds one level, and the target panel goes with it. */
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('menu-panel-target')).toHaveCount(0);
+    await expect(page.getByTestId('menu-title')).toHaveText('Skill');
+  });
+
+  test('the menu clears the narration instead of sitting under it', async ({ page }) => {
+    await ready(page);
+    await openSkills(page);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+
+    /* Three panels are wide enough to reach where the narration used to sit.
+       They share a flex column now; this is the assertion that says so. */
+    const menu = (await page.getByTestId('command-menu').boundingBox())!;
+    const narration = (await page.getByTestId('narration').boundingBox())!;
+
+    expect(narration.y + narration.height, 'narration sits above the menu').toBeLessThanOrEqual(
+      menu.y + 1,
+    );
   });
 });
 

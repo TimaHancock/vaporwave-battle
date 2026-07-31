@@ -17,6 +17,23 @@ export type ActorId = string;
 export type Side = 'party' | 'enemy';
 
 /**
+ * What an actor is, which decides what it can do.
+ *
+ * Declared here rather than in classes.ts so that Actor can carry it without
+ * types.ts importing the class table -- classes.ts needs SkillId from this
+ * file, and the two would form a cycle.
+ *
+ * The four party classes are the characters as authored in
+ * public/characters/CHARACTER_PROMPTS.md. Change one there and change it here.
+ */
+export type ClassName =
+  | 'knight'
+  | 'wizard'
+  | 'rogue'
+  | 'artificer'
+  | 'aberration';
+
+/**
  * Status effects. Phase 0 defines only the three visible in the reference
  * art. Expand deliberately -- each addition needs stacking rules, a
  * duration policy, and a damage-formula hook.
@@ -45,6 +62,8 @@ export interface Actor {
   id: ActorId;
   name: string;
   side: Side;
+  /** Decides this actor's attack name and skill list. See classes.ts. */
+  className: ClassName;
   level: number;
   stats: Stats;
   hp: number;

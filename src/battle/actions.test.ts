@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { takeAction, SKILLS, DEFEND_MAGNITUDE, DEFEND_TURNS } from './actions';
+import { takeAction, DEFEND_MAGNITUDE, DEFEND_TURNS } from './actions';
+import { SKILLS } from './skills';
 import { buildRound } from './turnOrder';
 import { statusMultiplier } from './damage';
 import { makeRoster } from './fixtures';

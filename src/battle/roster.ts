@@ -11,7 +11,7 @@
  * sprite gives the screen anchor for a damage number.
  */
 
-import type { Actor, Stats } from './types';
+import type { Actor, ClassName, Stats } from './types';
 
 /**
  * Baseline party stats. Numbers are small so tests resolve in few rounds.
@@ -50,13 +50,27 @@ export const BOSS_STATS: Stats = {
   speed: 70,
 };
 
-/** Party speeds, distinct and descending so the default order is unambiguous. */
-const PARTY_SPEEDS: Record<string, number> = {
-  kira: 130,
-  neo: 120,
-  vex: 110,
-  lyra: 100,
-};
+/**
+ * Party speeds and classes, in formation order.
+ *
+ * The class is what decides a character's attack name and skill list (see
+ * classes.ts), and it mirrors the art: kira is the dragonborn knight, neo the
+ * human wizard, vex the tiefling rogue, lyra the halfling artificer, exactly
+ * as authored in public/characters/CHARACTER_PROMPTS.md.
+ *
+ * Speeds are distinct and descending so the default turn order is
+ * unambiguous.
+ */
+const PARTY_MEMBERS: readonly {
+  id: string;
+  speed: number;
+  className: ClassName;
+}[] = [
+  { id: 'kira', speed: 130, className: 'knight' },
+  { id: 'neo', speed: 120, className: 'wizard' },
+  { id: 'vex', speed: 110, className: 'rogue' },
+  { id: 'lyra', speed: 100, className: 'artificer' },
+];
 
 export function makeActor(overrides: Partial<Actor> = {}): Actor {
   const stats = overrides.stats ?? PARTY_STATS;
@@ -64,6 +78,12 @@ export function makeActor(overrides: Partial<Actor> = {}): Actor {
     id: 'test',
     name: 'Test',
     side: 'party',
+    /* A default so the many makeActor() calls in the suite that do not care
+       about class keep working. Knight because it is the plainest loadout --
+       a damage skill, a buff, a bigger damage skill -- and so a test that
+       accidentally depends on the default depends on the least surprising
+       one. */
+    className: 'knight',
     level: 70,
     stats,
     hp: stats.maxHp,
@@ -75,11 +95,12 @@ export function makeActor(overrides: Partial<Actor> = {}): Actor {
 
 /** The four party members, in the same order as the on-screen formation. */
 export function makeParty(): Actor[] {
-  return Object.entries(PARTY_SPEEDS).map(([id, speed]) =>
+  return PARTY_MEMBERS.map(({ id, speed, className }) =>
     makeActor({
       id,
       name: id.toUpperCase(),
       side: 'party',
+      className,
       stats: { ...PARTY_STATS, speed },
     }),
   );
@@ -90,6 +111,7 @@ export function makeBoss(overrides: Partial<Actor> = {}): Actor {
     id: 'apollyon',
     name: 'APOLLYON',
     side: 'enemy',
+    className: 'aberration',
     level: 95,
     stats: BOSS_STATS,
     hp: BOSS_STATS.maxHp,

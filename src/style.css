@@ -103,12 +103,18 @@
      e2e/hud.spec.ts asserts the cards never overlap. */
   --card-scale-active: 1.05;
 
-  /* The turn-order tile's active scale. Larger than --card-scale-active
-     because the CUE has to survive the size difference, not the ratio:
-     5% of a 300px card is 15px and reads; 5% of a 36px tile is under 2px
-     and does not. At 36px this is +5.4px, 2.7px per side, inside the
-     --gap-sm the row is spaced with. */
-  --turn-scale-active: 1.15;
+  /* Turn-order carousel geometry. The pitch is what the whole thing is built
+     on: window width, the resting offset and the per-turn slide are all
+     multiples of it, and the slide MEASURES it off two adjacent tiles rather
+     than reading it back from here (an unregistered custom property computes
+     to its literal calc(), not to pixels). */
+  --turn-tile: 2.25rem;
+  --turn-gap: var(--gap-sm);
+  --turn-pitch: calc(var(--turn-tile) + var(--turn-gap));
+  /* How far the cursor sits outside the portrait it frames. The window is
+     grown by this at top and bottom so `overflow: hidden` does not shave the
+     reticle down to two vertical bars. */
+  --turn-bleed: 2px;
 }
 
 * {
@@ -185,18 +191,50 @@ body {
 
 /* ---------- Command menu ---------- */
 
-.hud-menu {
+/*
+ * The bottom-left column: narration above, command menu below.
+ *
+ * One positioned container rather than two regions each carrying their own
+ * `bottom`. The cascade is three panels wide when a skill is being targeted,
+ * which ran straight under where the narration used to sit at left: 13.5rem --
+ * and stacking by flex is what keeps the two clear of each other when the
+ * menu's height changes with its option count.
+ */
+.hud-corner {
   position: absolute;
   left: var(--gap-md);
-  /* Lifted to clear the party cards. Position only -- the menu's own styling
-     is the next pass. */
   bottom: calc(var(--card-strip) + var(--gap-md));
-  min-width: 11rem;
-  padding: var(--gap-sm) var(--gap-md);
-  border: var(--edge);
-  background: var(--surface);
-  backdrop-filter: blur(2px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--gap-sm);
+}
+
+/* The cascade: one panel per level walked through, left to right. */
+.hud-menu {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gap-sm);
   pointer-events: auto;
+}
+
+.hud-menu__panel {
+  min-width: 9rem;
+  padding: var(--gap-sm) var(--gap-md);
+  backdrop-filter: blur(2px);
+  /* Near-opaque, unlike the cards. The menu sits over the party sprites
+     rather than over the empty platform, and at the cards' translucency a
+     skill list is read through a character. */
+  --panel-idle: color-mix(in srgb, var(--void-deep) 96%, transparent);
+  --panel-active: color-mix(in srgb, var(--void) 94%, transparent);
+}
+
+/* A parent panel is a record of a choice already made. Present enough to
+   trace the path back, quiet enough not to compete with the live one --
+   and NOT so faint that it stops being readable, which is the only reason
+   to keep it on screen at all. */
+.hud-menu__panel:not([data-active]) {
+  opacity: 0.78;
 }
 
 .hud-menu__title {
@@ -206,6 +244,10 @@ body {
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--chrome) 65%, transparent);
+}
+
+.hud-menu__panel[data-active] .hud-menu__title {
+  color: color-mix(in srgb, var(--signal) 80%, var(--chrome));
 }
 
 .hud-menu__list {
@@ -219,26 +261,69 @@ body {
 
 .hud-menu__item {
   width: 100%;
-  padding: 0.2rem 0.4rem;
+  /* Room on the left for the cursor glyph, so a row does not shift sideways
+     when it becomes the selected one. */
+  padding: 0.2rem 0.4rem 0.2rem 1.1rem;
   border: 0;
   background: transparent;
   color: var(--chrome);
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   letter-spacing: 0.1em;
   text-align: left;
   text-transform: uppercase;
   cursor: pointer;
+  position: relative;
+  transition: color var(--card-motion) ease-out,
+    background-color var(--card-motion) ease-out;
 }
 
-.hud-menu__item:hover {
+.hud-menu__item:hover:not(:disabled) {
   color: var(--signal);
 }
 
+/*
+ * THE SELECTED ROW. Cyan as a RULE, not a fill.
+ *
+ * This used to be `background: var(--signal)` -- a solid cyan bar, the one
+ * thing the palette note at the top of this file says cyan must never be. It
+ * is now a 2px cyan edge down the row (an inset box-shadow, so it needs no
+ * extra element), cyan text with a soft bloom, and a magenta wash for the
+ * surface. Same emphasis, and it now matches the language the cards and the
+ * turn tiles already speak.
+ */
 .hud-menu__item.is-selected {
-  color: var(--void);
-  background: var(--signal);
-  box-shadow: 0 0 18px color-mix(in srgb, var(--signal) 65%, transparent);
+  color: var(--signal);
+  background-color: color-mix(in srgb, var(--horizon) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--signal);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--signal) 55%, transparent);
+}
+
+/* The cursor. A glyph as well as a colour, so the selected row is not
+   identified by hue alone -- and a ::before stays out of textContent, which
+   is what the suite reads for the option's label. */
+.hud-menu__item.is-selected::before {
+  content: '\25B8';
+  position: absolute;
+  left: 0.35rem;
+}
+
+/* A row in a parent panel: the choice that got you here, not where you are. */
+.hud-menu__item[data-chosen] {
+  color: color-mix(in srgb, var(--chrome) 85%, transparent);
+  background-color: color-mix(in srgb, var(--horizon) 16%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--horizon) 70%, transparent);
+}
+
+/* Unaffordable, or a parent panel's inert rows. Must not read as selectable. */
+.hud-menu__item:disabled {
+  cursor: default;
+  color: color-mix(in srgb, var(--chrome) 40%, transparent);
+}
+
+.hud-menu__item[data-chosen]:disabled,
+.hud-menu__item.is-selected:disabled {
+  color: color-mix(in srgb, var(--chrome) 80%, transparent);
 }
 
 /* Keyboard focus must stay visible -- this is a menu-driven game and the
@@ -250,10 +335,8 @@ body {
 
 /* ---------- Narration ---------- */
 
+/* Positioned by .hud-corner, which stacks it above the menu. */
 .hud-narration {
-  position: absolute;
-  left: 13.5rem;
-  bottom: calc(var(--card-strip) + var(--gap-md));
   margin: 0;
   padding: var(--gap-sm) var(--gap-md);
   max-width: min(32rem, 50vw);
@@ -287,43 +370,93 @@ body {
 /* ---------- Turn order ---------- */
 
 /*
- * Portraits only, next up first. A row of faces is read at a glance where the
- * numbered list of names this replaced had to be parsed -- and being glanced
- * at is the bar's entire job.
+ * A CAROUSEL: the round as a ring of portraits, rotating one place per turn.
+ *
+ * Four portraits show whole and a fifth is split across the seam -- half
+ * dissolving off the left edge as the turn just taken, half dissolving in at
+ * the right as the same character coming round again. The geometry that makes
+ * that work is documented on buildTurnOrder in src/ui/hud.ts; the numbers
+ * below are the other half of it and the two have to agree.
  *
  * Stays in NORMAL FLOW. It is the first in-flow child of #hud, so the
- * round/chain/phase strip continues to sit directly beneath it and no other
- * region has to be repositioned. Dropping the list padding is what removes
- * the browser's "1." markers.
+ * round/chain/phase strip continues to sit directly beneath it.
  */
 .hud-turn-order {
+  position: relative;
+  /* Exactly half + (N-1) full + half. --turn-slots is the ring size, set per
+     render because the ring shrinks when a party member falls. */
+  width: calc(var(--turn-slots, 5) * var(--turn-pitch));
+  /* Two pixels taller than a tile at each end, because the cursor is drawn
+     OUTSIDE the portrait it frames and `overflow: hidden` would otherwise
+     clip its top and bottom edges -- leaving two vertical bars rather than a
+     reticle. --turn-bleed is that outset, in one place, because the cursor's
+     offset and size are derived from it too. */
+  height: calc(var(--turn-tile) + 2 * var(--turn-bleed));
+  margin: 0 0 var(--gap-sm);
+  overflow: hidden;
+
+  /* The shadowy edge. The fade covers exactly the two half-tiles, so a
+     portrait DISSOLVES as it crosses the seam rather than being cut off by
+     the clip -- which is the difference between a carousel and a crop. */
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 calc(var(--turn-tile) / 2),
+    #000 calc(100% - var(--turn-tile) / 2),
+    transparent 100%
+  );
+}
+
+.hud-turn-order__track {
   display: flex;
   align-items: flex-end;
-  /* Shrink to the tiles. A block-level flex row would stretch the full width
-     of the HUD -- an invisible box reaching under the boss bar, which is both
-     untrue about what the bar occupies and something a future hover or
-     pointer-events change would trip over. */
-  width: fit-content;
-  gap: var(--gap-sm);
-  margin: 0 0 var(--gap-sm);
+  gap: var(--turn-gap);
+  /* Inset by the cursor's outset, so the tiles sit centred in the taller
+     window and the reticle has room above and below them. */
+  margin: var(--turn-bleed) 0 0;
   padding: 0;
   list-style: none;
+  width: max-content;
+  /* The resting offset. Puts the ring's last entry half-visible at the left
+     edge, the rest full, and that same entry half-visible again at the right.
+     The slide animation composites ONTO this rather than replacing it, which
+     is why it can finish by simply releasing. */
+  transform: translateX(calc(-1 * (var(--turn-tile) / 2 + var(--turn-pitch))));
 }
 
 .hud-turn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--turn-tile);
+  height: var(--turn-tile);
   padding: 0;
-}
-
-.hud-turn[data-current] {
-  transform: scale(var(--turn-scale-active));
+  flex: 0 0 auto;
 }
 
 .hud-turn__portrait {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/*
+ * The cursor: a reticle pinned over the "now" slot.
+ *
+ * It does not move -- the portraits rotate underneath it into place. Sized a
+ * little larger than a tile so it reads as a frame AROUND the portrait rather
+ * than a border on it, and positioned where the active tile rests: one pitch
+ * in, less the half-tile the track is offset by.
+ */
+.hud-turn-order__cursor {
+  position: absolute;
+  top: 0;
+  left: calc(var(--turn-pitch) - var(--turn-tile) / 2 - var(--turn-bleed));
+  width: calc(var(--turn-tile) + 2 * var(--turn-bleed));
+  height: calc(var(--turn-tile) + 2 * var(--turn-bleed));
+  pointer-events: none;
+  /* It frames a portrait, so it must not have a surface of its own. The
+     shared state rule reads these, which is exactly what the indirection is
+     for -- no specificity fight, no source-order dependency. */
+  --panel-idle: transparent;
+  --panel-active: transparent;
 }
 
 /* ---------- Shared panel state ---------- */
@@ -339,9 +472,15 @@ body {
  */
 
 .hud-card,
-.hud-turn {
+.hud-turn,
+.hud-menu__panel,
+.hud-turn-order__cursor {
   border: var(--card-border) solid var(--card-edge-idle);
-  background-color: var(--card-surface-idle);
+  /* Indirected through a custom property so a region can opt into a different
+     surface without fighting this rule on specificity or source order -- the
+     menu does, because it sits over the characters rather than over the
+     empty platform. Everything else takes the default. */
+  background-color: var(--panel-idle, var(--card-surface-idle));
   /* A faint magenta bloom so an idle panel still reads as neon rather than as
      a flat box -- recessive, not absent. */
   box-shadow: 0 0 10px color-mix(in srgb, var(--horizon) 20%, transparent);
@@ -369,9 +508,10 @@ body {
    permanently soft. Without it the text is only soft during the handover and
    crisp at rest. */
 .hud-card[aria-current='true'],
-.hud-turn[data-current] {
+.hud-turn-order__cursor,
+.hud-menu__panel[data-active] {
   border-color: var(--card-edge-active);
-  background-color: var(--card-surface-active);
+  background-color: var(--panel-active, var(--card-surface-active));
   box-shadow: 0 0 24px color-mix(in srgb, var(--signal) 45%, transparent),
     0 0 8px color-mix(in srgb, var(--signal) 60%, transparent),
     inset 0 0 16px color-mix(in srgb, var(--signal) 10%, transparent);
@@ -586,7 +726,9 @@ body {
   .hud-boss__fill,
   .hud-card__fill,
   .hud-card,
-  .hud-turn {
+  .hud-turn,
+  .hud-menu__panel,
+  .hud-menu__item {
     transition: none;
   }
 }

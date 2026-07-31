@@ -17,6 +17,7 @@
  */
 
 import { calculateDamage } from './damage';
+import { SKILLS } from './skills';
 import { applyStatus, tickStatuses } from './status';
 import {
   isDefeated,
@@ -54,54 +55,10 @@ export const DEFEND_TURNS = 2;
 /* Skills                                                              */
 /* ------------------------------------------------------------------ */
 
-export interface Skill {
-  id: SkillId;
-  name: string;
-  mpCost: number;
-  /** Which side a legal target is on, relative to the actor. */
-  target: 'enemy' | 'ally';
-  /** Damage multiplier. Omitted for a skill that deals none. */
-  power?: number;
-  critChance?: number;
-  critMultiplier?: number;
-  /** Fraction of the target's maxHp restored. */
-  heal?: number;
-  /** Status applied to the target on resolution. */
-  status?: Omit<Status, 'turnsRemaining'> & { turnsRemaining: number };
-}
-
-/**
- * The skill table.
- *
- * Three entries, one per shape the resolver has to handle: pure damage, a
- * buff, and a heal. Kept in this file while it is this small; it moves out
- * the moment characters get individual skill lists.
- */
-export const SKILLS: Record<SkillId, Skill> = {
-  pulse_strike: {
-    id: 'pulse_strike',
-    name: 'Pulse Strike',
-    mpCost: 12,
-    target: 'enemy',
-    power: 2.1,
-    critChance: 0.2,
-    critMultiplier: 2,
-  },
-  overclock: {
-    id: 'overclock',
-    name: 'Overclock',
-    mpCost: 18,
-    target: 'ally',
-    status: { kind: 'ATK_UP', magnitude: 1.35, turnsRemaining: 3 },
-  },
-  repair_field: {
-    id: 'repair_field',
-    name: 'Repair Field',
-    mpCost: 20,
-    target: 'ally',
-    heal: 0.35,
-  },
-};
+/* The table moved to skills.ts once characters got individual lists -- see
+   the note there. Re-exported so `Skill` stays reachable from the module that
+   resolves it. */
+export type { Skill } from './skills';
 
 const BASIC_ATTACK = {
   power: 1,
