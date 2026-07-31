@@ -35,23 +35,30 @@ export const SHOTS = [
     time: 2.0,
   },
   {
-    name: 'cast_grounded',
+    name: 'full_cast',
     description:
-      'Five billboards with contact shadows -- one real character, four ' +
-      'placeholders. Check the silhouette edges for halo, and that each ' +
-      'figure reads as standing ON the platform rather than floating above it.',
+      'The whole cast in final art: four party members left, Apollyon right. ' +
+      'The question the validator cannot answer -- could you name each ' +
+      'character from its outline alone at this size? Also: does each figure ' +
+      'stand ON the platform rather than above it, do the heights read as ' +
+      'four different races, and does any silhouette carry a halo or fringe?',
     seed: 1337,
     time: 1.0,
   },
   {
-    name: 'first_art',
+    name: 'boss_closeup',
     description:
-      'First real character in the scene, at the default alphaTest. Three ' +
-      'questions: is there a halo or fringe along the silhouette, does the ' +
-      'contact shadow read as touching the floor, and does the baked key ' +
-      'light agree with the scene key from the upper front-left?',
+      'Apollyon cropped out of the canonical render -- the camera has not ' +
+      'moved. At this magnification: is the alphaTest cutoff clean along the ' +
+      'tentacles and the halo shards, does the contact shadow sit under the ' +
+      'creature rather than under its transparent margin, and does the mass ' +
+      'read as threatening rather than merely big?',
     seed: 1337,
     time: 1.0,
+    /* Twice the pixels at the same 16:9, so the composition is identical and
+       only the sampling improves. */
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0.56, y: 0.08, width: 0.36, height: 0.7 },
   },
   {
     name: 'bloom_off',

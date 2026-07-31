@@ -266,15 +266,13 @@ function fitSpacingToPlatform(
 /* Boss placement                                                      */
 /* ------------------------------------------------------------------ */
 
-export interface BossPlacement {
+export interface BossLayoutOptions {
   x: number;
   z: number;
-  /** World height. The party stands 2.2, so this is the size relationship. */
-  worldHeight: number;
 }
 
 /**
- * Where the boss stands, and how big it is.
+ * Where the boss stands.
  *
  * Constrained rather than eyeballed, the same way DEFAULT_PARTY_LAYOUT is:
  *
@@ -285,10 +283,11 @@ export interface BossPlacement {
  *             rather than the boss looming from a second row. Standing it
  *             back at -2.2 read as depth staging, but it also shrank the
  *             boss by distance and separated the sides into two planes.
- *   height    3.6 is 1.64x the party. Imposing without dominating, and it
- *             puts the head at screen y 0.23 -- below the APOLLYON LV95
- *             bar, so a damage number anchored there is not fighting the
- *             HUD for the same pixels.
+ *
+ * Size is NOT here. It belongs to the character, not to the spot it stands
+ * on, so it lives in the cast table with every other character's height --
+ * and pushing the boss back in z buys no height anyway: at z -2.5 it renders
+ * 429 px tall, the same as it does on this line.
  *
  * Sharing a z with the party is what makes the tie-break in
  * assignRenderOrders load-bearing; see the note there.
@@ -296,10 +295,9 @@ export interface BossPlacement {
  * Feet land 2.61 from the platform centre, comfortably inside
  * PLATFORM_SAFE_RADIUS.
  */
-export const DEFAULT_BOSS_PLACEMENT: BossPlacement = {
+export const DEFAULT_BOSS_LAYOUT: BossLayoutOptions = {
   x: 2.6,
   z: 0.2,
-  worldHeight: 3.6,
 };
 
 /**
@@ -316,11 +314,11 @@ export const DEFAULT_BOSS_PLACEMENT: BossPlacement = {
  * it; the party case can clamp because "about this far apart" is a request,
  * whereas a boss position is an instruction.
  */
-export function bossPosition(placement: BossPlacement = DEFAULT_BOSS_PLACEMENT): Vec3 {
-  const { x, z, worldHeight } = placement;
+export function layoutBoss(options: BossLayoutOptions = DEFAULT_BOSS_LAYOUT): Vec3 {
+  const { x, z } = options;
 
-  if (worldHeight <= 0) {
-    throw new Error(`Boss worldHeight must be positive, got ${worldHeight}`);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    throw new Error(`Boss position must be finite, got (${x}, ${z})`);
   }
 
   const distance = Math.hypot(x, z);

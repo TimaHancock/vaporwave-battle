@@ -131,8 +131,15 @@ export interface CastEntry {
    */
   side: Side;
   texture: THREE.Texture;
-  /** World height. ~2.2 reads as an adult human against this platform. */
-  worldHeight: number;
+  /**
+   * How tall the CHARACTER stands, in world units. ~2.2 reads as an adult
+   * human against this platform. The sprite layer derives the plane from it
+   * by dividing out the art's transparent margin -- see
+   * CharacterSpriteOptions.
+   */
+  characterHeight?: number;
+  /** Plane height, for art with no character to measure (placeholders). */
+  worldHeight?: number;
   /** Feet position. y is ignored; sprites are always grounded. */
   position: Vec3;
   /** Override the default alpha cutoff for tricky art. */
@@ -405,11 +412,14 @@ export function createBattleScene(rng: Rng): BattleScene {
       entries.forEach((entry, index) => {
         const sprite = createCharacterSprite({
           texture: entry.texture,
-          worldHeight: entry.worldHeight,
           position: entry.position,
           renderOrder: orders[index] ?? 0,
           name: entry.name,
           side: entry.side,
+          ...(entry.characterHeight === undefined
+            ? {}
+            : { characterHeight: entry.characterHeight }),
+          ...(entry.worldHeight === undefined ? {} : { worldHeight: entry.worldHeight }),
           ...(entry.alphaTest === undefined ? {} : { alphaTest: entry.alphaTest }),
         });
         cast.push(sprite);

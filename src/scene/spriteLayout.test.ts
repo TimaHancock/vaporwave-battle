@@ -6,10 +6,10 @@ import {
   assignRenderOrders,
   contactShadowSize,
   formationExtent,
-  bossPosition,
+  layoutBoss,
   SPRITE_RENDER_ORDER_BASE,
   DEFAULT_PARTY_LAYOUT,
-  DEFAULT_BOSS_PLACEMENT,
+  DEFAULT_BOSS_LAYOUT,
   PLATFORM_RADIUS,
   PLATFORM_SAFE_RADIUS,
   CANONICAL_ASPECT,
@@ -47,21 +47,31 @@ function projectedScreenX(worldX: number, worldZ: number, aspect: number): numbe
   return (worldX / halfWidth + 1) / 2;
 }
 
-describe('bossPosition', () => {
+describe('layoutBoss', () => {
   it('grounds the boss at the placement coordinates', () => {
-    expect(bossPosition()).toEqual({ x: 2.6, y: 0, z: 0.2 });
+    expect(layoutBoss()).toEqual({ x: 2.6, y: 0, z: 0.2 });
   });
 
   it('keeps the default placement on the platform', () => {
-    const { x, z } = DEFAULT_BOSS_PLACEMENT;
-    expect(Math.hypot(x, z)).toBeLessThan(PLATFORM_SAFE_RADIUS);
+    expect(formationExtent([layoutBoss()])).toBeLessThan(PLATFORM_SAFE_RADIUS);
   });
 
   /* The composition contract: party left, boss right. The party half is
      asserted separately against a four-member formation. */
   it('places the boss in the right half of a 16:9 frame', () => {
-    const { x, z } = DEFAULT_BOSS_PLACEMENT;
+    const { x, z } = DEFAULT_BOSS_LAYOUT;
     expect(projectedScreenX(x, z, CANONICAL_ASPECT)).toBeGreaterThan(0.6);
+  });
+
+  /* The boss is the widest sprite in the scene, so unlike a party member it
+     can be comfortably inside the platform and still have a shoulder off the
+     side of the frame. Its plane is ~2.9 units across at the authored height;
+     half of that either side of centre must still project on screen. */
+  it('keeps the whole boss inside the frame at 16:9', () => {
+    const { x, z } = DEFAULT_BOSS_LAYOUT;
+    const halfWidth = 2.9 / 2;
+    expect(projectedScreenX(x + halfWidth, z, CANONICAL_ASPECT)).toBeLessThan(0.97);
+    expect(projectedScreenX(x - halfWidth, z, CANONICAL_ASPECT)).toBeGreaterThan(0.03);
   });
 
   it('stands clear of the rightmost party member', () => {
@@ -70,8 +80,8 @@ describe('bossPosition', () => {
       ...party.map((p) => projectedScreenX(p.x, p.z, CANONICAL_ASPECT)),
     );
     const boss = projectedScreenX(
-      DEFAULT_BOSS_PLACEMENT.x,
-      DEFAULT_BOSS_PLACEMENT.z,
+      DEFAULT_BOSS_LAYOUT.x,
+      DEFAULT_BOSS_LAYOUT.z,
       CANONICAL_ASPECT,
     );
     expect(boss).toBeGreaterThan(rightmostParty + 0.15);
@@ -81,22 +91,20 @@ describe('bossPosition', () => {
      from a second row behind the party. */
   it('stands on the same line as the party front rank', () => {
     const partyDepths = layoutParty(4).map((p) => p.z);
-    expect(DEFAULT_BOSS_PLACEMENT.z).toBe(Math.max(...partyDepths));
+    expect(DEFAULT_BOSS_LAYOUT.z).toBe(Math.max(...partyDepths));
   });
 
   it('is separated from the party by distance across, not depth', () => {
     const rightmostParty = Math.max(...layoutParty(4).map((p) => p.x));
-    expect(DEFAULT_BOSS_PLACEMENT.x - rightmostParty).toBeGreaterThan(2);
+    expect(DEFAULT_BOSS_LAYOUT.x - rightmostParty).toBeGreaterThan(2);
   });
 
   it('rejects a placement past the platform lip', () => {
-    expect(() => bossPosition({ x: 5, z: -3, worldHeight: 3.6 })).toThrow(
-      /PLATFORM_SAFE_RADIUS/,
-    );
+    expect(() => layoutBoss({ x: 5, z: -3 })).toThrow(/PLATFORM_SAFE_RADIUS/);
   });
 
-  it('rejects a non-positive height', () => {
-    expect(() => bossPosition({ x: 0, z: 0, worldHeight: 0 })).toThrow(/0/);
+  it('rejects a placement that is not a number', () => {
+    expect(() => layoutBoss({ x: Number.NaN, z: 0 })).toThrow(/finite/);
   });
 });
 
@@ -269,7 +277,7 @@ describe('assignRenderOrders', () => {
   });
 
   it('gives the on-screen cast a stable sequence regardless of cast order', () => {
-    const cast = [...layoutParty(4), bossPosition()];
+    const cast = [...layoutParty(4), layoutBoss()];
     const shuffled = [cast[4]!, cast[1]!, cast[3]!, cast[0]!, cast[2]!];
 
     const byPosition = new Map(

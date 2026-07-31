@@ -39,18 +39,26 @@ async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
   const browser = await chromium.launch();
-  const context = await browser.newContext({
-    viewport: VIEWPORT,
-    // Pin DPR so screenshot dimensions are identical on every machine.
-    deviceScaleFactor: 1,
-    // Ambient CSS transitions would otherwise race the capture.
-    reducedMotion: 'reduce',
-  });
 
+  const newContext = (viewport) =>
+    browser.newContext({
+      viewport: viewport ?? VIEWPORT,
+      // Pin DPR so screenshot dimensions are identical on every machine.
+      deviceScaleFactor: 1,
+      // Ambient CSS transitions would otherwise race the capture.
+      reducedMotion: 'reduce',
+    });
+
+  const context = await newContext();
   const failures = [];
 
   for (const shot of SHOTS) {
-    const page = await context.newPage();
+    /* A shot may ask for a bigger frame -- boss_closeup does, to get pixels
+       on the silhouette edge. Keep the ASPECT the same as VIEWPORT when you
+       do: the camera's fov is vertical, so a different aspect is a different
+       composition, and the shot stops being comparable with the others. */
+    const shotContext = shot.viewport ? await newContext(shot.viewport) : context;
+    const page = await shotContext.newPage();
 
     // Surface browser-side errors. A silent exception in the scene is the
     // single most common cause of a black screenshot.
@@ -75,7 +83,25 @@ async function main() {
 
       const state = await page.evaluate(() => window.__debugState);
 
-      await page.screenshot({ path: `${OUT_DIR}/${shot.name}.png` });
+      /* A clip is a crop of the canonical render, NOT a moved camera. The
+         camera is locked by design (see CLAUDE.md), so the only honest way
+         to look closely at one character is to cut that part out of the
+         frame everything else is judged in. Expressed as fractions so it
+         survives a viewport change. */
+      const { width: vw, height: vh } = shot.viewport ?? VIEWPORT;
+      const clip = shot.clip
+        ? {
+            x: Math.round(shot.clip.x * vw),
+            y: Math.round(shot.clip.y * vh),
+            width: Math.round(shot.clip.width * vw),
+            height: Math.round(shot.clip.height * vh),
+          }
+        : undefined;
+
+      await page.screenshot({
+        path: `${OUT_DIR}/${shot.name}.png`,
+        ...(clip ? { clip } : {}),
+      });
       await writeFile(
         `${OUT_DIR}/${shot.name}.json`,
         JSON.stringify({ shot, url, consoleErrors, state }, null, 2),
@@ -101,6 +127,7 @@ async function main() {
         .catch(() => {});
     } finally {
       await page.close();
+      if (shotContext !== context) await shotContext.close();
     }
   }
 

@@ -25,16 +25,9 @@ import './style.css';
 import * as THREE from 'three';
 import { createBattleScene, CAMERA } from './scene/battleScene';
 import { createPostProcessing } from './scene/post';
-import {
-  createPlaceholderBossTexture,
-  createPlaceholderCharacterTexture,
-  loadCharacterTexture,
-} from './scene/sprite';
-import {
-  bossPosition,
-  layoutParty,
-  DEFAULT_BOSS_PLACEMENT,
-} from './scene/spriteLayout';
+import { loadCharacterTexture } from './scene/sprite';
+import { layoutBoss, layoutParty } from './scene/spriteLayout';
+import { CAST, PARTY } from './scene/cast';
 import { renderHud, toHudModel } from './ui/hud';
 import { back, confirm, moveCursor, INITIAL_MENU, type MenuState } from './ui/menu';
 import { createBattle } from './battle/battle';
@@ -99,15 +92,9 @@ function nonNegativeParam(raw: string | null): number | undefined {
    the boss occupies. Dropping one shrinks the formation to 0.47 and opens
    the right half of frame; layoutParty handles the respacing.
 
-   Names double as ActorIds. The first member has real art; the rest stay
-   procedural until their PNGs exist. */
-const PARTY_NAMES = ['kira', 'neo', 'vex', 'lyra'] as const;
-
-/** Matches the boss actor id in the battle roster. */
-const BOSS_NAME = 'apollyon';
-
-/** Served from the web root -- public/ is copied there by Vite. */
-const KIRA_TEXTURE_URL = './characters/kira.png';
+   Who they are, how tall they are and which PNG they are all live in
+   scene/cast.ts, which mirrors public/characters/CHARACTER_PROMPTS.md. */
+const PARTY_NAMES = PARTY.map((member) => member.name);
 
 /* ---------------------------------------------------------------- */
 /* Bootstrap                                                         */
@@ -353,36 +340,41 @@ async function main(
   /* --- Character cast --------------------------------------------- */
 
   /* Rejects on failure rather than substituting a blank. Nothing below
-     runs, and `ready` stays false -- see the catch at the bottom. */
-  const kira = await loadCharacterTexture(KIRA_TEXTURE_URL);
+     runs, and `ready` stays false -- see the catch at the bottom.
+
+     One texture per sprite, never shared: CharacterSprite.dispose()
+     disposes its own map, so a shared texture would be destroyed the first
+     time any one of its sprites went away. Loaded together rather than in
+     sequence: five round trips one after another is five times the latency
+     before anything appears, for no reason. */
+  const textures = await Promise.all(
+    CAST.map((member) => loadCharacterTexture(member.textureUrl)),
+  );
 
   /* ONE spawnCast call for the whole cast, boss included.
      assignRenderOrders() ranks everyone in a single pass, so spawning the
      party and the boss separately would produce two independent draw
      sequences that collide -- and the boss, being furthest back, is exactly
-     the sprite that has to draw first.
-
-     One texture per sprite, never shared: CharacterSprite.dispose()
-     disposes its own map, so a shared texture would be destroyed the first
-     time any one of its sprites went away. */
+     the sprite that has to draw first. */
   const partyPositions = layoutParty(PARTY_NAMES.length);
+  let partyIndex = 0;
 
-  battle.spawnCast([
-    ...PARTY_NAMES.map((name, index) => ({
-      name,
-      side: 'party' as const,
-      texture: index === 0 ? kira : createPlaceholderCharacterTexture(),
-      worldHeight: 2.2,
-      position: partyPositions[index] ?? { x: 0, y: 0, z: 0 },
+  battle.spawnCast(
+    CAST.map((member, index) => ({
+      name: member.name,
+      side: member.side,
+      texture: textures[index]!,
+      /* The character's height, not the plane's. The sprite layer divides
+         out the art's transparent margin, so these stay the authored
+         numbers however the PNGs happen to be framed. */
+      characterHeight: member.characterHeight,
+      position:
+        member.side === 'party'
+          ? partyPositions[partyIndex++] ?? { x: 0, y: 0, z: 0 }
+          : layoutBoss(),
+      ...(member.alphaTest === undefined ? {} : { alphaTest: member.alphaTest }),
     })),
-    {
-      name: BOSS_NAME,
-      side: 'enemy' as const,
-      texture: createPlaceholderBossTexture(),
-      worldHeight: DEFAULT_BOSS_PLACEMENT.worldHeight,
-      position: bossPosition(),
-    },
-  ]);
+  );
 
   /* --- Go --------------------------------------------------------- */
 

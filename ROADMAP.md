@@ -126,6 +126,10 @@ Then:
 possible place to have learned it. Tune `alphaTest`, bloom threshold, or
 regenerate the art before continuing.
 
+> **Done, and since superseded.** All five characters now have real art and
+> the placeholders are gone, so `first_art` and `cast_grounded` were replaced
+> by `full_cast` and `boss_closeup`. The cast lives in `src/scene/cast.ts`.
+
 ---
 
 # Phase 2 — Battle logic, no pixels

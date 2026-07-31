@@ -182,7 +182,8 @@ this is the panel worth checking.
 2. Run the prep script.
 3. Read the report. Regenerate on any FAIL.
 4. Open the contact sheet and look at the right-hand panel.
-5. Drop into the scene, run `npm run shots`, look at `first_art.png`.
+5. Add it to `src/scene/cast.ts`, run `npm run shots`, look at
+   `full_cast.png` — and `boss_closeup.png` if it was the boss.
 
 Once one character passes cleanly, **generate the remaining five in the same
 sitting** with the same model and settings. Consistency degrades across

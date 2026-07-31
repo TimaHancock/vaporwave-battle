@@ -40,8 +40,30 @@ import type { Side } from '../battle/types';
 export interface CharacterSpriteOptions {
   /** Loaded character texture. Must have transparency already applied. */
   texture: THREE.Texture;
-  /** How tall the character stands, in world units. ~2.2 reads as human. */
-  worldHeight: number;
+  /**
+   * How tall the PLANE is, in world units. Prefer `characterHeight`.
+   *
+   * The plane is not the character: art is authored with a transparent
+   * margin, and how much margin varies per asset, so equal plane heights
+   * produce unequal characters. Supply this only when there is no character
+   * to measure -- a placeholder texture, or a unit test.
+   */
+  worldHeight?: number;
+  /**
+   * How tall the CHARACTER stands, in world units -- the number a person
+   * means by "how tall is she". ~2.2 reads as human against this platform.
+   *
+   * The plane is derived from it by dividing out the empty margin measured
+   * in the texture, so the visible figure is this tall whatever the art's
+   * framing does. That indirection is the whole point: the prep tool scales
+   * every character to fill its own frame, which means relative height is
+   * NOT carried by the art. See the scale trap in
+   * public/characters/CHARACTER_PROMPTS.md, which is also where these
+   * numbers are authored.
+   *
+   * Takes precedence over `worldHeight` when both are given.
+   */
+  characterHeight?: number;
   /** Where the character's feet go. y is ignored; feet always sit on ground. */
   position: Vec3;
   /** Draw sequence, from assignRenderOrders(). Furthest sprite gets lowest. */
@@ -325,6 +347,7 @@ export function createCharacterSprite(
   const {
     texture,
     worldHeight,
+    characterHeight,
     position,
     renderOrder,
     name,
@@ -360,18 +383,40 @@ export function createCharacterSprite(
   texture.generateMipmaps = true;
 
   const { width: pixelWidth, height: pixelHeight } = texturePixelSize(texture, name);
-  const size = spriteDimensions(pixelWidth, pixelHeight, worldHeight);
 
   /* --- Where the character actually is inside its image -------------- */
 
-  /* The image's edges are not the character's edges. Both grounding and
-     head placement need the content, not the canvas. */
+  /* The image's edges are not the character's edges. Sizing, grounding and
+     head placement all need the content, not the canvas -- so this is
+     measured BEFORE the plane exists, and the plane is derived from it. */
   const bounds = opaqueBounds(texture, pixelWidth, pixelHeight, alphaTest);
 
   /** Fraction of the image height that is empty below the feet. */
   const feetInset = bounds === null ? 0 : (pixelHeight - 1 - bounds.maxY) / pixelHeight;
   /** Fraction of the image height that is empty above the head. */
   const headInset = bounds === null ? 0 : bounds.minY / pixelHeight;
+
+  /* --- Plane height -------------------------------------------------- */
+
+  /* Divide the empty margin back out, so `characterHeight` describes the
+     figure and not the canvas it was drawn on. Two assets framed differently
+     -- and the prep tool frames every character to fill its own frame, so
+     they always are -- still stand at the heights the cast table asks for.
+
+     Without this, a flat worldHeight makes the halfling as tall as the
+     wizard, because her art fills 76% of its frame and his fills 76% of his. */
+  const planeHeight =
+    characterHeight === undefined
+      ? worldHeight
+      : characterHeight / Math.max(1 - feetInset - headInset, 1e-6);
+
+  if (planeHeight === undefined) {
+    throw new Error(
+      `Sprite "${name}" needs characterHeight or worldHeight; got neither.`,
+    );
+  }
+
+  const size = spriteDimensions(pixelWidth, pixelHeight, planeHeight);
 
   /* --- Geometry ----------------------------------------------------- */
 
@@ -427,6 +472,12 @@ export function createCharacterSprite(
 
   /* --- Contact shadow ----------------------------------------------- */
 
+  /* The plane's top edge is empty margin; the character's crown is lower.
+     For a 2.2-unit sprite with a 4% top margin that is ~17 screen pixels,
+     which is the difference between a damage number over the head and one
+     floating in the air above it. */
+  const contentHeight = size.height * (1 - feetInset - headInset);
+
   /* Flat art standing in a 3D scene looks pasted on without this. It is
      one mesh and one small texture, and it does more for believability
      than any other single thing in the sprite layer. */
@@ -434,7 +485,12 @@ export function createCharacterSprite(
   let shadowTexture: THREE.CanvasTexture | null = null;
 
   if (shadowOpacity > 0) {
-    const shadowSize = contactShadowSize(size.height);
+    /* Sized from the CHARACTER, not from the plane. A sprite carrying a lot
+       of empty margin -- the boss's plane is 5.8 units for a 3.8-unit
+       creature -- would otherwise cast a shadow scaled to its transparent
+       sky, and a shadow half again too wide reads as the character hovering
+       above a pool rather than standing in one. */
+    const shadowSize = contactShadowSize(contentHeight);
     shadowTexture = createRadialFalloffTexture();
 
     const shadowGeometry = new THREE.PlaneGeometry(
@@ -471,12 +527,6 @@ export function createCharacterSprite(
   /* --- Public interface ---------------------------------------------- */
 
   const headWorld = new THREE.Vector3();
-
-  /* The plane's top edge is empty margin; the character's crown is lower.
-     For a 2.2-unit sprite with a 4% top margin that is ~17 screen pixels,
-     which is the difference between a damage number over the head and one
-     floating in the air above it. */
-  const contentHeight = size.height * (1 - feetInset - headInset);
 
   return {
     group,

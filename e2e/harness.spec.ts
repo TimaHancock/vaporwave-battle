@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { CAST, PARTY, BOSS } from '../src/scene/cast';
 
 /**
  * Phase 0 acceptance tests.
@@ -118,6 +119,7 @@ test.describe('sprite billboard layer', () => {
     // pass as "still five sprites".
     expect(sprites.filter((s) => s.side === 'party')).toHaveLength(4);
     expect(sprites.filter((s) => s.side === 'enemy')).toHaveLength(1);
+    expect(sprites.map((s) => s.name).sort()).toEqual(CAST.map((m) => m.name).sort());
 
     for (const sprite of sprites) {
       // Feet on the ground plane. A non-zero y means the grounding maths
@@ -132,11 +134,79 @@ test.describe('sprite billboard layer', () => {
       // renders as a sliver.
       expect(sprite.size[0]).not.toBeCloseTo(sprite.size[1], 3);
 
-      // The boss is deliberately larger than the party; a boss that came
-      // through at party height means its placement constants were lost.
-      const expectedHeight = sprite.side === 'enemy' ? 3.6 : 2.2;
-      expect(sprite.size[1], `${sprite.name} height`).toBeCloseTo(expectedHeight, 3);
+      /* Every character stands at the height the cast table -- and behind it
+         CHARACTER_PROMPTS.md -- says it does.
+
+         contentHeight, not size[1]: size[1] is the PLANE, which includes
+         whatever transparent margin the art happens to carry, and that
+         varies per asset by a third. Asserting the plane would pin an
+         accident of framing and break the next time a PNG is re-prepped;
+         asserting the visible figure is the actual contract. */
+      const authored = CAST.find((m) => m.name === sprite.name);
+      expect(authored, `${sprite.name} is in the cast table`).toBeDefined();
+      expect(sprite.contentHeight, `${sprite.name} height`).toBeCloseTo(
+        authored!.characterHeight,
+        1,
+      );
     }
+  });
+
+  test('the boss looms roughly twice the party', async ({ page }) => {
+    await page.goto('/?seed=1337&time=2.0');
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+    const party = sprites.filter((s) => s.side === 'party');
+    const boss = sprites.find((s) => s.side === 'enemy')!;
+
+    /* Size relationship rather than a literal, because the number that
+       matters is how the boss compares to the people it is fighting. A boss
+       that came through at party scale means its cast entry was lost. */
+    const meanPartyPlane =
+      party.reduce((total, s) => total + s.size[1], 0) / party.length;
+    expect(boss.size[1] / meanPartyPlane).toBeGreaterThan(1.7);
+    expect(boss.size[1] / meanPartyPlane).toBeLessThan(2.3);
+
+    // And it must out-loom every one of them individually, not just on average.
+    for (const member of party) {
+      expect(boss.contentHeight, `boss vs ${member.name}`).toBeGreaterThan(
+        member.contentHeight * 1.4,
+      );
+    }
+
+    /* The party's own order, which a flat height would flatten: the
+       dragonborn knight stands over the halfling artificer. */
+    const heightOf = (name: string) =>
+      party.find((s) => s.name === name)!.contentHeight;
+    expect(heightOf('kira')).toBeGreaterThan(heightOf('lyra'));
+    expect(heightOf('lyra') / heightOf('kira')).toBeLessThan(0.75);
+  });
+
+  test('sprite planes carry the art\'s margin without moving the character', async ({
+    page,
+  }) => {
+    await page.goto('/?seed=1337&time=2.0');
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+
+    for (const sprite of sprites) {
+      /* The plane is always at least as tall as the character -- it is the
+         character plus the transparent margin. Equal would mean the margin
+         measurement returned nothing, which is how a sprite ends up sunk
+         into the floor by exactly its own foot gap. */
+      expect(sprite.contentHeight, `${sprite.name}`).toBeLessThan(sprite.size[1]);
+      expect(sprite.contentHeight).toBeGreaterThan(sprite.size[1] * 0.4);
+      expect(sprite.feetInset, `${sprite.name} feet inset`).toBeGreaterThan(0);
+    }
+
+    /* The boss carries the most margin of anyone -- its art was framed for a
+       portrait crop it does not fill. If this ever equalises, the art was
+       re-prepped, and the point of deriving the plane at load is that
+       nothing else has to change when it is. */
+    const boss = sprites.find((s) => s.side === 'enemy')!;
+    expect(boss.contentHeight).toBeCloseTo(BOSS.characterHeight, 1);
+    expect(PARTY).toHaveLength(4);
   });
 
   test('assigns unique render orders, furthest sprite drawn first', async ({ page }) => {
