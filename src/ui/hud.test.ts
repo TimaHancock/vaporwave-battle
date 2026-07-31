@@ -11,7 +11,11 @@ import type { BattleState } from '../battle/types';
  * against these same values through a real browser.
  */
 
-const IDLE = { narration: 'Awaiting orders.', isLocked: false };
+const IDLE = {
+  narration: 'Awaiting orders.',
+  history: ['Awaiting orders.'],
+  isLocked: false,
+};
 
 const model = (state: BattleState = createBattle(1337, makeRoster())) =>
   toHudModel(state, INITIAL_MENU, IDLE);
@@ -177,7 +181,11 @@ describe('toHudModel', () => {
   });
 
   it('carries the counters and the sequencer view straight through', () => {
-    const view = { narration: 'KIRA attacks APOLLYON!', isLocked: true };
+    const view = {
+      narration: 'KIRA attacks APOLLYON!',
+      history: ['Awaiting orders.', 'KIRA attacks APOLLYON!'],
+      isLocked: true,
+    };
     const hud = toHudModel(createBattle(1, makeRoster()), INITIAL_MENU, view);
 
     expect(hud.round).toBe(1);
@@ -185,6 +193,12 @@ describe('toHudModel', () => {
     expect(hud.phase).toBe('in_progress');
     expect(hud.narration).toBe('KIRA attacks APOLLYON!');
     expect(hud.isLocked).toBe(true);
+
+    /* The action log renders the tail of this, and hangs the `narration`
+       testid on its last entry. The two describing the same moment is the
+       sequencer's invariant, and this is where the HUD depends on it. */
+    expect(hud.history).toEqual(['Awaiting orders.', 'KIRA attacks APOLLYON!']);
+    expect(hud.history.at(-1)).toBe(hud.narration);
   });
 
   it('renders the command level as a single active panel by default', () => {

@@ -102,6 +102,31 @@ export const SHOTS = [
     clip: { x: 0, y: 0, width: 0.2, height: 0.1 },
   },
   {
+    name: 'action_log',
+    description:
+      'The upper-left action log, one full turn in: the narration history ' +
+      'under the carousel, newest at the bottom. The questions no assertion ' +
+      'can answer -- do the older lines DISSOLVE as they rise, or do they ' +
+      'cut off at an edge? Is the newest line legible against the sky ' +
+      'behind it? Does the blurred backing read as a soft shadow under the ' +
+      'text rather than as a box? And is there daylight between the last ' +
+      'line and the top of KIRA\'s head?',
+    seed: 1337,
+    time: 1.0,
+    /* Enter submits KIRA's attack. stepMs=0 collapses the beats so `settle`
+       returns immediately -- the log ends up with the whole turn in it, and
+       the seed still decides every number in it. */
+    query: 'stepMs=0',
+    keys: ['Enter'],
+    settle: true,
+    /* scale rather than a bigger viewport, for the same reason as
+       turn_order: the log is sized in rem. The clip reaches down past the
+       log's bottom edge on purpose -- the margin above KIRA is half the
+       subject, so her head has to be in frame. */
+    scale: 3,
+    clip: { x: 0, y: 0, width: 0.28, height: 0.42 },
+  },
+  {
     name: 'party_cards',
     description:
       'The bottom of the frame: four party cards, the command menu lifted ' +

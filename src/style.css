@@ -115,6 +115,18 @@
      grown by this at top and bottom so `overflow: hidden` does not shave the
      reticle down to two vertical bars. */
   --turn-bleed: 2px;
+
+  /* Action-log geometry. The height is FIXED and the stack is bottom-
+     anchored, so the newest line sits at a constant y and older lines grow
+     upward off it -- the "now" line never moves as the log fills.
+
+     NOT free to grow, for the same kind of reason --card-strip is not: the
+     camera is locked, and Kira's head projects to screen y 0.369 at 16:9.
+     Five lines puts the bottom edge around 0.28, leaving ~60px of daylight
+     above her at 720p. e2e/hud.spec.ts asserts that clearance. */
+  --log-line: 1.4rem;
+  --log-lines: 5;
+  --log-height: calc(var(--log-lines) * var(--log-line));
 }
 
 * {
@@ -192,26 +204,18 @@ body {
 /* ---------- Command menu ---------- */
 
 /*
- * The bottom-left column: narration above, command menu below.
+ * The cascade: one panel per level walked through, left to right.
  *
- * One positioned container rather than two regions each carrying their own
- * `bottom`. The cascade is three panels wide when a skill is being targeted,
- * which ran straight under where the narration used to sit at left: 13.5rem --
- * and stacking by flex is what keeps the two clear of each other when the
- * menu's height changes with its option count.
+ * It used to share a .hud-corner column with the narration line, which
+ * existed so the two could not collide -- the cascade is three panels wide
+ * when a skill is being targeted, and that reached straight under where the
+ * narration sat. The narration is now the action log in the OPPOSITE corner,
+ * so the menu owns the bottom-left on its own and carries its own offset.
  */
-.hud-corner {
+.hud-menu {
   position: absolute;
   left: var(--gap-md);
   bottom: calc(var(--card-strip) + var(--gap-md));
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--gap-sm);
-}
-
-/* The cascade: one panel per level walked through, left to right. */
-.hud-menu {
   display: flex;
   align-items: flex-start;
   gap: var(--gap-sm);
@@ -333,17 +337,131 @@ body {
   outline-offset: 2px;
 }
 
-/* ---------- Narration ---------- */
+/* ---------- Action log ---------- */
 
-/* Positioned by .hud-corner, which stacks it above the menu. */
-.hud-narration {
+/*
+ * The narration history, top-left, beneath the carousel and the status strip.
+ *
+ * IN NORMAL FLOW, the third in-flow child of #hud -- so it inherits the
+ * column the carousel established rather than restating its own left edge.
+ *
+ * The max-width keeps a line from wrapping into the boss bar's column. The
+ * longest line the battle produces ("CRITICAL! APOLLYON takes 180 damage!")
+ * is around 250px at this size, so wrapping is the exception, and
+ * overflow: hidden is the guard for when it happens: an extra visual row
+ * pushes the stack UP, out of the window, rather than down into Kira.
+ */
+.hud-log {
+  height: var(--log-height);
+  margin-top: var(--gap-sm);
+  max-width: min(26rem, 34vw);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.hud-log__lines {
+  height: 100%;
   margin: 0;
-  padding: var(--gap-sm) var(--gap-md);
-  max-width: min(32rem, 50vw);
-  border: var(--edge);
-  background: var(--surface);
-  font-size: 0.85rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 0;
+}
+
+/*
+ * A line: text on a soft blurred backing, no edge.
+ *
+ * `width: fit-content` is what keeps this from reading as a box. The backing
+ * hugs each line's own length, so the right edge is ragged and the region
+ * has no rectangle -- and a half-full log paints no empty panel under the
+ * lines it does not have.
+ */
+.hud-log__line {
+  width: fit-content;
+  /* Asymmetric on purpose: the right padding is what the mask below eats,
+     so it has to be at least as wide as the fade. */
+  padding: 0.1rem 1.6rem 0.1rem 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
   letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--void-deep) 32%, transparent);
+  backdrop-filter: blur(3px);
+  text-shadow: 0 1px 3px var(--void-deep);
+  /*
+   * THE RIGHT EDGE DISSOLVES. Without this the backing is a rectangle, and
+   * a blur with a hard boundary reads as a BOX -- most visibly where a line
+   * crosses the bright pillar behind the party, which smears into the
+   * backing and stops dead at the padding. Lines are ragged-right by
+   * design, so that edge is different on every row and there is nothing for
+   * the eye to read it as except a panel.
+   *
+   * The left edge is left hard: it is the same column the carousel and the
+   * status strip establish, so it reads as alignment rather than as an
+   * edge. Top and bottom are shared with the neighbouring rows.
+   *
+   * A mask makes its element a backdrop root for its DESCENDANTS -- the
+   * element's own backdrop-filter still samples the page behind it, so the
+   * blur survives here. Nesting the blur on a child would kill it.
+   */
+  mask-image: linear-gradient(90deg, #000 calc(100% - 1.6rem), transparent);
+  transition: opacity var(--card-motion) ease-out;
+}
+
+/*
+ * THE FADE IS AN AGE RAMP, NOT A MASK.
+ *
+ * The obvious implementation -- mask-image on .hud-log, fading the top
+ * toward transparent -- is a trap twice over. A mask makes its element a
+ * BACKDROP ROOT, so every backdrop-filter inside it would have nothing
+ * behind it left to blur and the blur would silently disappear. And a
+ * spatial gradient cuts wherever it lands, which is usually through the
+ * middle of a line of text rather than between two.
+ *
+ * Ageing by row instead means a line dissolves as a whole, and the ramp is
+ * steep enough that the oldest is all but gone before it reaches the
+ * carousel above. Opacity and backdrop-filter on the SAME element is fine --
+ * the blurred backdrop is composited at the element's opacity, so the
+ * backing fades out with its text.
+ *
+ * The steps are per-age rather than an nth-child rule because the count is
+ * fixed at LOG_LINES in hud.ts. Change one and change the other.
+ */
+.hud-log__line[data-age='0'] {
+  opacity: 1;
+  color: var(--chrome);
+}
+
+.hud-log__line[data-age='1'] {
+  opacity: 0.72;
+}
+
+.hud-log__line[data-age='2'] {
+  opacity: 0.48;
+}
+
+.hud-log__line[data-age='3'] {
+  opacity: 0.28;
+}
+
+.hud-log__line[data-age='4'] {
+  opacity: 0.12;
+}
+
+/* The newest line arrives rather than appearing. A CSS transition cannot do
+   this -- the element is new, so it has no previous value to move from --
+   which is why this is a keyframe. */
+@keyframes hud-log-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.4rem);
+  }
+}
+
+.hud-log__line[data-age='0'] {
+  animation: hud-log-arrive var(--card-motion) ease-out;
 }
 
 /* ---------- Party cards ---------- */
@@ -728,7 +846,13 @@ body {
   .hud-card,
   .hud-turn,
   .hud-menu__panel,
-  .hud-menu__item {
+  .hud-menu__item,
+  .hud-log__line {
     transition: none;
+  }
+
+  /* The age ramp is information, so it stays. Only the arrival moves. */
+  .hud-log__line[data-age='0'] {
+    animation: none;
   }
 }

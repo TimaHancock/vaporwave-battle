@@ -147,8 +147,9 @@ with `publishDebugState` fed from the same view so the DOM and
 `__debugState.battle` can never describe different moments.
 
 **Phase 5 complete: the HUD is built.** Party cards along the bottom, a
-portrait turn-order bar top-left, and a cascading command menu. Only the
-round/chain/phase strip is still bare.
+portrait turn-order bar top-left with the action log beneath it, and a
+cascading command menu bottom-left. Only the round/chain/phase strip is
+still bare.
 
 **Characters play differently now.** `battle/classes.ts` maps a `ClassName` to
 an attack name and a skill list; `battle/skills.ts` is the flat table those ids
@@ -217,7 +218,10 @@ Card facts worth knowing before changing them:
   rem, so enlarging the frame renders the same tile into more pixels of frame
   and makes it *smaller*. `viewport` is for scene shots like `boss_closeup`.
   A shot can also carry `keys: [...]`, played after ready and before capture,
-  which is how `command_menu` gets a menu two levels deep.
+  which is how `command_menu` gets a menu two levels deep. Keys that SUBMIT
+  an action need `settle: true` as well, or the capture photographs the turn
+  mid-flight at a different beat every run — `action_log` pairs it with
+  `stepMs=0` so the wait costs nothing.
 - **DOM-only e2e specs load with `?time=0`.** That renders one frame and halts
   the animation loop. Headless Chromium has no GPU, so the scene rasterises in
   software at 135-200ms a frame, and leaving the loop running made the suite
@@ -233,11 +237,36 @@ Card facts worth knowing before changing them:
   They cannot go under the boss bar: the head-clearance test measures that
   element's box and there is ~20px of headroom.
 
+**The narration is the action log now.** The single-line box above the
+command menu is gone; `buildLog` renders the history top-left, under the
+carousel and the status strip, newest at the bottom. A line held for one beat
+was survivable for a player action they chose and were watching for, and not
+for an enemy turn — the boss acts three beats deep into narration the
+player's attention has already left. What the log rests on:
+
+- **`SequencerView.history` ends on `narration`, always.** That invariant is
+  why the `narration` testid can ride the log's newest line and every
+  assertion in `e2e/battle.spec.ts` still means what it did. `narrate()`
+  writes both in one statement, and `sequencer.test.ts` checks it on every
+  emitted view.
+- **`history` is uncapped so an index into it stays valid**, which is what
+  lets `buildLog` append only what it has not yet rendered rather than
+  rebuild — a rebuilt list has no previous opacity, so the age ramp would
+  snap. The DOM is capped instead, at `LOG_LINES`.
+- **The fade is an age ramp, not a mask.** `mask-image` on the container
+  would make it a *backdrop root*, and every `backdrop-filter` inside would
+  have nothing left to blur. A per-line `data-age` fades a whole line rather
+  than cutting through the middle of one. The per-line right-edge mask is
+  fine — an element's own `backdrop-filter` still samples the page.
+- **`--log-height` is bounded by Kira's head** at screen y 0.369, the mirror
+  of the `--card-strip` / 0.743 rule. The stack is bottom-anchored so that
+  edge is a constant; an e2e test reads the head from `__debugState.sprites`
+  rather than hardcoding it, so re-laying out the party fails loudly.
+
 Not done, and the obvious next steps:
 
-- **The remaining regions.** A real turn-order bar, then the command menu with
-  submenus and target selection. The display typeface is still an open
-  decision.
+- **The round/chain/phase strip.** The last unstyled region. The display
+  typeface is still an open decision.
 - **The damage-number layer.** The seam is ready: a sprite's `name` is its
   `ActorId`, so a `damage` event's `targetId` resolves to a sprite and
   `headScreenPosition()` gives the anchor.

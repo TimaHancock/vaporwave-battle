@@ -115,6 +115,28 @@ async function main() {
         await page.keyboard.press(key);
       }
 
+      /*
+       * Optionally wait for the turn those keys started to finish playing.
+       *
+       * Without this, a shot whose keys SUBMIT an action photographs the
+       * sequence mid-flight -- at whatever beat the round trip happened to
+       * land on, differently every run. The turn_order shot avoids the
+       * problem by not pressing anything; a shot whose subject is the
+       * action log has no such option, because an untouched battle has one
+       * line in it.
+       *
+       * Waiting on the lock rather than sleeping is what keeps it
+       * deterministic: the seed decides the outcome, and this only decides
+       * when to look. Pair it with `stepMs=0` so the wait is instant.
+       */
+      if (shot.settle) {
+        await page.waitForFunction(
+          () => window.__debugState?.battle?.isLocked === false,
+          null,
+          { timeout: READY_TIMEOUT_MS },
+        );
+      }
+
       const state = await page.evaluate(() => window.__debugState);
 
       /* A clip is a crop of the canonical render, NOT a moved camera. The

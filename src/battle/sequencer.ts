@@ -62,6 +62,26 @@ export interface SequencerView {
   state: BattleState;
   /** The line currently on screen. */
   narration: string;
+  /**
+   * Every narration line, oldest first. The last is ALWAYS `narration`.
+   *
+   * That invariant is load-bearing outside this file: the HUD renders the
+   * tail of this array as the action log and hangs the `narration` testid on
+   * the newest line, so the suite's assertions about "the current line" and
+   * the log's bottom row are the same element. Break it and they silently
+   * describe different moments.
+   *
+   * Recorded here rather than derived from `log`, because the lines that
+   * announce an action -- "KIRA uses Scale Cleave on APOLLYON!", "APOLLYON
+   * moves." -- are not events and never will be.
+   *
+   * UNCAPPED on purpose. A full fight is a few hundred short strings, and an
+   * uncapped array means an index into it stays valid forever -- which is
+   * what lets the HUD append only what it has not yet rendered instead of
+   * diffing strings that legitimately repeat. Capping here would shift the
+   * array out from under that index. The DOM is capped instead.
+   */
+  history: readonly string[];
   /** True while a sequence is playing. Input must be ignored. */
   isLocked: boolean;
   /** Labels of steps not yet run. Empty when idle. */
@@ -162,6 +182,9 @@ export function createSequencer(options: SequencerOptions): Sequencer {
 
   let state = options.state;
   let narration = OPENING_NARRATION;
+  /* Seeded, not empty. The log is on screen from the first frame, and the
+     last-entry-is-narration invariant has to hold at boot too. */
+  const history: string[] = [OPENING_NARRATION];
   let locked = false;
   let actionsTaken = 0;
   const log: BattleEvent[] = [];
@@ -172,6 +195,7 @@ export function createSequencer(options: SequencerOptions): Sequencer {
     return {
       state,
       narration,
+      history: [...history],
       isLocked: locked,
       pending: queue.map((step) => step.label),
       log: [...log],
@@ -195,7 +219,11 @@ export function createSequencer(options: SequencerOptions): Sequencer {
     return {
       label: 'narrate',
       run: () => {
+        /* One statement, so `history` and `narration` cannot disagree --
+           the same reason `commit` writes the state and the event log
+           together. */
         narration = text;
+        history.push(text);
         emit();
       },
     };

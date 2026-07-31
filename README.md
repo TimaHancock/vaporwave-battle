@@ -14,7 +14,7 @@ makes everything after it fast.
 
 - A three.js scene: grid horizon, gradient sun, chrome platform and
   columns, seven drifting polyhedra. All generated in code, zero art assets.
-- A minimal DOM HUD: boss health bar, command menu, narration line.
+- A minimal DOM HUD: boss health bar, command menu, action log.
 - A damage formula and a seeded RNG, with 16 passing unit tests.
 - A screenshot harness producing PNGs plus machine-readable state dumps.
 - End-to-end DOM tests.

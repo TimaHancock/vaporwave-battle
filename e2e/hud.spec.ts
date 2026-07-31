@@ -801,20 +801,162 @@ test.describe('the command menu', () => {
     await expect(page.getByTestId('menu-title')).toHaveText('Skill');
   });
 
-  test('the menu clears the narration instead of sitting under it', async ({ page }) => {
+  test('the cascade stays clear of the action log across the frame', async ({ page }) => {
     await ready(page);
     await openSkills(page);
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
 
-    /* Three panels are wide enough to reach where the narration used to sit.
-       They share a flex column now; this is the assertion that says so. */
+    /* Three panels deep is the menu at its widest and tallest. It used to
+       share a flex column with the narration line to stay clear of it; the
+       narration is the action log in the opposite corner now, and the menu
+       owns the bottom-left alone. This says the move actually separated
+       them rather than moving the collision. */
     const menu = (await page.getByTestId('command-menu').boundingBox())!;
-    const narration = (await page.getByTestId('narration').boundingBox())!;
+    const log = (await page.getByTestId('action-log').boundingBox())!;
 
-    expect(narration.y + narration.height, 'narration sits above the menu').toBeLessThanOrEqual(
-      menu.y + 1,
+    expect(menu.y, 'menu top vs log bottom').toBeGreaterThanOrEqual(log.y + log.height);
+  });
+});
+
+/**
+ * Phase 5c: the action log.
+ *
+ * It replaced the single-line narration box, so the `narration` testid moved
+ * with it -- onto the newest line, which the sequencer guarantees is the
+ * current one (see SequencerView.history). Everything e2e/battle.spec.ts
+ * asserts about narration is still asserting against this region.
+ *
+ * The load-bearing test here is the head clearance. The log grows upward off
+ * a fixed bottom edge precisely so that edge is a constant, and the constant
+ * is chosen against where Kira's head projects through the locked camera.
+ */
+test.describe('the action log', () => {
+  const lines = (page: Page) => page.locator('.hud-log__line');
+
+  /** Every line, top to bottom -- oldest first. */
+  async function rows(page: Page): Promise<string[]> {
+    return lines(page).allTextContents();
+  }
+
+  /**
+   * Waits out the arrival keyframe AND the age-ramp transitions.
+   *
+   * Sampling opacity mid-animation reads a number that belongs to neither
+   * the old row nor the new one, which is a flake rather than a failure --
+   * the same reason the carousel has a settled() of its own.
+   */
+  async function still(page: Page): Promise<void> {
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.hud-log__line')].every((el) =>
+        el.getAnimations().every((animation) => animation.playState !== 'running'),
+      ),
     );
+  }
+
+  test('opens showing the current line and nothing else', async ({ page }) => {
+    await ready(page);
+
+    await expect(lines(page)).toHaveCount(1);
+    await expect(page.getByTestId('narration')).toHaveText('Awaiting orders.');
+    /* The newest line IS the narration element, not a copy sitting beside
+       it. One line, one place. */
+    await expect(page.getByTestId('narration')).toHaveClass(/hud-log__line/);
+  });
+
+  test('adds newest at the bottom and ages upward', async ({ page }) => {
+    await ready(page, '&stepMs=0');
+
+    const opening = await rows(page);
+    await page.keyboard.press('Enter');
+    await idle(page);
+
+    const after = await rows(page);
+    expect(after.length).toBeGreaterThan(opening.length);
+
+    /* Read top to bottom, the log is oldest to newest: the opening line is
+       still above what followed it. A log that grew the other way would put
+       the line the player is reading at the top and push it down as the turn
+       plays out, which is the one thing the fade cannot survive. */
+    expect(after[0]).toBe(opening[0]);
+    await expect(page.getByTestId('narration')).toHaveText(after.at(-1)!);
+  });
+
+  test('numbers the rows by age, newest zero', async ({ page }) => {
+    await ready(page, '&stepMs=0');
+    await page.keyboard.press('Enter');
+    await idle(page);
+
+    const ages = await lines(page).evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-age')),
+    );
+
+    /* Top to bottom, the age counts DOWN to zero. The CSS ramp is keyed on
+       this attribute, so if it ever ran the other way the newest line would
+       be the faintest. */
+    expect(ages).toEqual(ages.map((_, i) => String(ages.length - 1 - i)));
+  });
+
+  test('fades toward the carousel instead of cutting off', async ({ page }) => {
+    await ready(page, '&stepMs=0');
+    for (let turn = 0; turn < 3; turn++) {
+      await page.keyboard.press('Enter');
+      await idle(page);
+    }
+    await still(page);
+
+    const opacities = await lines(page).evaluateAll((els) =>
+      els.map((el) => Number(getComputedStyle(el).opacity)),
+    );
+
+    expect(opacities.length).toBeGreaterThan(2);
+    /* Strictly increasing downward: every line is more present than the one
+       above it, and the top of the stack is nearly gone before it reaches
+       the turn-order bar. */
+    for (let i = 1; i < opacities.length; i++) {
+      expect(opacities[i]!, `row ${i} vs ${i - 1}`).toBeGreaterThan(opacities[i - 1]!);
+    }
+    expect(opacities.at(-1), 'the current line is fully opaque').toBe(1);
+    expect(opacities[0], 'the oldest line is all but gone').toBeLessThan(0.2);
+  });
+
+  test('caps the rows however long the fight runs', async ({ page }) => {
+    await ready(page, '&stepMs=0');
+    for (let turn = 0; turn < 5; turn++) {
+      await page.keyboard.press('Enter');
+      await idle(page);
+    }
+
+    /* Five turns is well past a round, so the boss has acted and the history
+       is far longer than the window. LOG_LINES in src/ui/hud.ts. */
+    const history = await page.evaluate(() => window.__debugState!.battle!.actionsTaken);
+    expect(history).toBeGreaterThanOrEqual(4);
+    await expect(lines(page)).toHaveCount(5);
+  });
+
+  test('sits under the carousel and a clear margin above Kira', async ({ page }) => {
+    await ready(page);
+    await page.waitForFunction(() => window.__debugState?.ready === true);
+
+    const viewport = page.viewportSize()!;
+    const log = (await page.getByTestId('action-log').boundingBox())!;
+    const carousel = (await page.getByTestId('turn-order').boundingBox())!;
+
+    expect(log.y, 'log top vs carousel bottom').toBeGreaterThanOrEqual(
+      carousel.y + carousel.height,
+    );
+
+    /* THE CONSTRAINT ON --log-height. The camera is locked, so where Kira's
+       head lands is a fixed number, and the log's bottom edge is fixed too
+       -- it grows upward. Reading the head from the debug channel rather
+       than hardcoding 0.369 means re-laying out the party fails this test
+       instead of silently dropping text on her face. */
+    const sprites = await page.evaluate(() => window.__debugState!.sprites);
+    const kira = sprites.find((sprite) => sprite.name === 'kira');
+    expect(kira, 'kira sprite').toBeDefined();
+
+    const bottom = (log.y + log.height) / viewport.height;
+    expect(bottom, 'log bottom vs kira head').toBeLessThan(kira!.headScreen[1] - 0.05);
   });
 });
 

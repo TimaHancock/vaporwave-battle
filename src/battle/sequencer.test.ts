@@ -184,6 +184,61 @@ describe('the step queue', () => {
   });
 });
 
+/**
+ * The action log renders the tail of `history` and hangs the `narration`
+ * testid on its newest line, so these two properties are what make the DOM
+ * and the sequencer describe the same moment. Asserted here rather than in
+ * Playwright because they are properties of every emitted view, and a
+ * browser test can only sample.
+ */
+describe('the narration history', () => {
+  it('opens with the current line already in it', () => {
+    const { sequencer } = harness();
+
+    /* Not empty at boot. The log is on screen from the first frame. */
+    expect(sequencer.view.history).toEqual(['Awaiting orders.']);
+    expect(sequencer.view.narration).toBe('Awaiting orders.');
+  });
+
+  it('ends on the current line in EVERY view it emits', async () => {
+    const { sequencer, views } = harness();
+    await playUntilEnemyActs(sequencer);
+
+    expect(views.length).toBeGreaterThan(0);
+    for (const [index, view] of views.entries()) {
+      expect(view.history.at(-1), `view ${index}`).toBe(view.narration);
+    }
+  });
+
+  it('only ever grows, so an index into it stays valid', async () => {
+    const { sequencer, views } = harness();
+    await playUntilEnemyActs(sequencer);
+
+    /* The HUD appends only the entries beyond what it has already rendered,
+       counting from the front. Dropping or reordering anything already
+       emitted would silently shift every line it has on screen. */
+    for (let i = 1; i < views.length; i++) {
+      const before = views[i - 1]!.history;
+      const after = views[i]!.history;
+      expect(after.length).toBeGreaterThanOrEqual(before.length);
+      expect(after.slice(0, before.length)).toEqual([...before]);
+    }
+  });
+
+  it('records the lines the event log cannot produce', async () => {
+    const { sequencer } = harness();
+    await playUntilEnemyActs(sequencer);
+
+    /* The reason this is recorded at `narrate` rather than derived from
+       `log`: neither of these is an event, and neither ever will be. */
+    const attack = attackNameFor(makeParty()[0]!);
+    const history = sequencer.view.history;
+
+    expect(history.some((line) => line.includes(`KIRA uses ${attack}`))).toBe(true);
+    expect(history).toContain('APOLLYON moves.');
+  });
+});
+
 describe('the enemy turn', () => {
   it('announces whose turn it is before showing what it did', async () => {
     const { sequencer, views } = harness();

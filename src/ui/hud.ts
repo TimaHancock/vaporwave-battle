@@ -112,6 +112,16 @@ export interface HudModel {
    */
   panels: readonly MenuPanel[];
   narration: string;
+  /**
+   * Every narration line, oldest first. The action log renders the tail.
+   *
+   * `narration` is kept alongside it rather than replaced by
+   * `history.at(-1)`: it is the sequencer's own statement of what is on
+   * screen NOW, and the log's newest line is only the same element because
+   * that invariant holds. Two names for one fact is the point -- if they
+   * ever diverge, the log is the thing that is wrong.
+   */
+  history: readonly string[];
   isLocked: boolean;
 }
 
@@ -122,7 +132,7 @@ export interface HudModel {
 export function toHudModel(
   state: BattleState,
   menu: MenuState,
-  view: { narration: string; isLocked: boolean },
+  view: { narration: string; isLocked: boolean; history: readonly string[] },
 ): HudModel {
   const activeActorId = state.turnQueue[state.turnIndex] ?? null;
 
@@ -191,6 +201,7 @@ export function toHudModel(
     activeActorId,
     panels: menuPanels(state, menu),
     narration: view.narration,
+    history: view.history,
     isLocked: view.isLocked,
   };
 }
@@ -259,18 +270,14 @@ function buildHud(root: HTMLElement, model: HudModel): HudView {
   const enemies = buildEnemyReadout(model);
   const status = buildStatusLine();
   const menu = buildCommandMenu();
-  const narration = buildNarration();
+  const log = buildLog();
 
-  /* The narration and the menu share one positioned column rather than each
-     carrying its own `bottom`. The cascade is three panels wide when a skill
-     is being targeted, which ran straight under where the narration used to
-     sit -- and stacking by flex is what keeps them clear of each other when
-     the menu's height changes with its option count. */
-  const corner = document.createElement('div');
-  corner.className = 'hud-corner';
-  corner.append(narration.el, menu.el);
-
-  root.append(boss.el, turnOrder.el, party.el, enemies.el, status.el, corner);
+  /* Append order is paint order. The log follows the status strip because it
+     is the third IN-FLOW child of the top-left column: carousel, then the
+     round/chain/phase strip, then the history hanging beneath them. The menu
+     is absolutely positioned in the opposite corner and its place in this
+     list means nothing. */
+  root.append(boss.el, turnOrder.el, party.el, enemies.el, status.el, log.el, menu.el);
 
   return {
     update(next: HudModel): void {
@@ -280,7 +287,7 @@ function buildHud(root: HTMLElement, model: HudModel): HudView {
       enemies.update(next);
       status.update(next);
       menu.update(next);
-      narration.update(next);
+      log.update(next);
     },
   };
 }
@@ -953,22 +960,84 @@ const TESTID_PREFIX: Record<MenuPanel['level'], string> = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Narration                                                           */
+/* Action log                                                          */
 /* ------------------------------------------------------------------ */
 
-function buildNarration(): Region {
-  const el = document.createElement('p');
-  el.className = 'hud-narration';
-  el.dataset['testid'] = 'narration';
-  /* Announced to screen readers as the sequencer steps through a turn.
-     Updating the text of a live region is what actually announces -- the old
-     replace-the-whole-node approach was announcing by accident. */
-  el.setAttribute('role', 'status');
+/**
+ * How many lines stay in the DOM. Beyond this, the oldest is dropped.
+ *
+ * The CSS ages each surviving line by its `data-age` and the oldest is
+ * nearly transparent, so this number and the opacity ramp in style.css are
+ * one decision in two files -- raise it there too or the new bottom line
+ * appears at full strength and the fade turns into a cut.
+ */
+const LOG_LINES = 5;
+
+/**
+ * The action log: the narration history, newest at the bottom.
+ *
+ * This replaces the single-line narration box that used to sit above the
+ * command menu. A line held for one beat and was gone, which is survivable
+ * for a player action they chose and were watching for, and not for an enemy
+ * turn -- the boss acts three beats deep into narration the player's
+ * attention has already left, and they are told why their HP moved exactly
+ * once. Older lines riding upward mean the answer is still on screen.
+ *
+ * THE UPDATE IS APPEND-ONLY, which is what keeps this region honest about
+ * the build-once-update-in-place contract above. `rendered` is a count of
+ * history entries already turned into elements, and it is a valid index
+ * forever because the sequencer never drops from the front of `history`.
+ * Rebuilding the list instead would work and would also throw away every
+ * element's previous opacity, so the age ramp would snap rather than
+ * transition -- the boss bar's bug, one region along.
+ */
+function buildLog(): Region {
+  const el = document.createElement('div');
+  el.className = 'hud-log';
+  el.dataset['testid'] = 'action-log';
+
+  /* The LIST is the live region, not the line. A `role="log"` announces its
+     new children, which is precisely the shape of this data; a per-line
+     `role="status"` would announce by node insertion, which is the accident
+     the narration box was fixed to stop relying on. */
+  const list = document.createElement('ol');
+  list.className = 'hud-log__lines';
+  list.setAttribute('role', 'log');
+  list.setAttribute('aria-live', 'polite');
+  list.setAttribute('aria-relevant', 'additions');
+  list.setAttribute('aria-label', 'Battle log');
+
+  el.append(list);
+
+  let rendered = 0;
 
   return {
     el,
     update(next: HudModel): void {
-      setText(el, next.narration);
+      for (let i = rendered; i < next.history.length; i++) {
+        const line = document.createElement('li');
+        line.className = 'hud-log__line';
+        line.textContent = next.history[i]!;
+        list.append(line);
+      }
+      rendered = next.history.length;
+
+      while (list.children.length > LOG_LINES) {
+        list.firstElementChild?.remove();
+      }
+
+      /* Walk newest-first so age 0 is the bottom row. The `narration` testid
+         RIDES the newest line -- see SequencerView.history for why that is
+         the same thing as the current line, and e2e/battle.spec.ts for what
+         reads it. */
+      const lines = list.children;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i] as HTMLElement;
+        const age = lines.length - 1 - i;
+        setAttr(line, 'data-age', String(age));
+        if (age === 0) setAttr(line, 'data-testid', 'narration');
+        else if (line.hasAttribute('data-testid')) line.removeAttribute('data-testid');
+      }
     },
   };
 }
