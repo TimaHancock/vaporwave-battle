@@ -21,6 +21,12 @@ import {
   terrainIndices,
   type BankOptions,
 } from './mountains';
+import {
+  colonnadePositions,
+  COLUMN_FACETS,
+  DAIS_FACETS,
+  DAIS_TIERS,
+} from './arena';
 /* Type-only, so it erases at build time -- the scene shares battle
    vocabulary without taking a dependency on battle logic. */
 import type { Side } from '../battle/types';
@@ -212,6 +218,33 @@ export function createBattleScene(rng: Rng): BattleScene {
    * live grid lines. That is a screenshot check, not an assertion.
    */
   scene.fog = new THREE.Fog(PALETTE.void, 22, 96);
+
+  /*
+   * What the chrome reflects.
+   *
+   * THE FINDING THIS WHOLE ARENA PASS RESTS ON: a metal surface has
+   * essentially no diffuse term. What it shows you is what it reflects, and
+   * until now there was no environment map anywhere in this project -- so
+   * ~80% of `metalness: 0.8` was inert and the pale lavender platform was the
+   * 20% dielectric remainder catching the key light. The chrome was not
+   * reading as chrome because it could not.
+   *
+   * Painted from the palette rather than shipped as an asset, the same
+   * argument as createGradientTexture: it is the aesthetic, and the aesthetic
+   * is code. It approximates the real scene -- sunset band behind, plum sky
+   * above, magenta waterline, dark below -- rather than capturing it.
+   *
+   * DELIBERATELY NOT PMREMGenerator, which needs the renderer that
+   * createBattleScene has no reference to. Assigning an equirect texture to
+   * scene.environment gets it PMREM'd by the renderer on first use anyway, so
+   * the signature stays clean and nothing is lost.
+   *
+   * It reaches EVERY MeshStandardMaterial in the scene, dice included. That
+   * is a scene-wide decision wearing a platform-shaped hat; per-material
+   * envMapIntensity is where each surface says how much of it it wants.
+   */
+  const environmentTexture = registry.track(createEnvironmentTexture());
+  scene.environment = environmentTexture;
 
   const camera = new THREE.PerspectiveCamera(
     CAMERA.fov,
@@ -463,36 +496,175 @@ export function createBattleScene(rng: Rng): BattleScene {
   );
   scene.add(new THREE.Points(starGeometry, starMaterial));
 
-  /* --- Combat platform -------------------------------------------- */
-  const platformGeometry = registry.track(new THREE.CylinderGeometry(6, 6.4, 0.6, 48));
-  const platformMaterial = registry.track(
+  /* --- Combat dais -------------------------------------------------- */
+  /*
+   * Faceted tiers from arena.ts: deck plate, chamfer, drum, footing. Two of
+   * those numbers are a contract -- the deck's top face is y 0 and its radius
+   * is PLATFORM_RADIUS -- and the module's tests hold them.
+   *
+   * This was a single CylinderGeometry(6, 6.4, 0.6, 48). Faceting is the
+   * bigger half of why that read as painted plastic: 48 segments is the one
+   * round thing in a scene of cut planes, and a smooth cylinder averages the
+   * key light into a single gradient where facets break it into planes.
+   *
+   * The other half is the material, and it is fixed above by scene.environment
+   * -- see createEnvironmentTexture.
+   */
+  const daisMaterial = registry.track(
     new THREE.MeshStandardMaterial({
-      color: PALETTE.chrome,
-      roughness: 0.25,
-      metalness: 0.8,
+      /* DARK, and not `chrome`, which is where this started and why the deck
+         kept coming out as a cream sheet. A metal's reflection is TINTED BY
+         ITS OWN COLOUR: at `chrome` (0xd9c7ff, near white) a floor this size
+         can only ever be bright, whatever the environment does, and it
+         outshone the characters standing on it. At `ridge` it is a dark
+         maroon mirror -- the sunset lands on it as a warm sheen instead of a
+         wash, and the cast reads against it.
+
+         The columns stay chrome. Deck and columns wanting different values is
+         a composition fact, not an inconsistency: one is a large field that
+         should recede, the other is a narrow vertical that can carry a
+         highlight. */
+      color: PALETTE.ridge,
+      /* Roughness on a metal BLURS THE REFLECTION; with no env map it only
+         broadened a specular dot, so the old 0.25 was tuned against a
+         different problem entirely. At 0.18 the deck was a near-perfect
+         mirror, and a near-horizontal mirror under this camera reflects one
+         direction -- about 8 degrees up, straight down -Z, which is exactly
+         where the sun is. The whole deck came out a flat cream sheet. 0.4
+         spreads it over enough of the sky to become a gradient. */
+      roughness: 0.3,
+      metalness: 0.9,
+      /* And the reflection is a SUGGESTION of the sky, not a window onto it.
+         At 1.0 over a near-white base the deck outshone the characters
+         standing on it; the arena is the stage, not the subject. Over a dark
+         base it can carry more. */
+      envMapIntensity: 0.7,
+      /* Facets, so each plane gets one normal and the light steps between
+         them rather than sweeping across. */
+      flatShading: true,
     }),
   );
-  const platform = new THREE.Mesh(platformGeometry, platformMaterial);
-  platform.position.set(0, -0.3, 0);
-  scene.add(platform);
 
-  /* --- Chrome columns --------------------------------------------- */
-  const columnGeometry = registry.track(new THREE.CylinderGeometry(0.35, 0.42, 6, 24));
+  /*
+   * The deck face is its own material, darker than the structure under it.
+   *
+   * Not a stylistic split -- a compositional one. The deck is the largest
+   * unbroken surface in the lower half of frame and the characters have to
+   * read against it, so it recedes; the drum and chamfer are narrow bands
+   * that can carry a highlight without competing.
+   *
+   * It is also flat and horizontal, which means every pixel reflects nearly
+   * the same direction and it can only ever be ONE VALUE. Facets do nothing
+   * for it. Breaking it up is what the deck markings are for.
+   */
+  const deckMaterial = registry.track(
+    new THREE.MeshStandardMaterial({
+      color: PALETTE.plum,
+      roughness: 0.45,
+      metalness: 0.9,
+      envMapIntensity: 0.6,
+      flatShading: true,
+    }),
+  );
+
+  for (const tier of DAIS_TIERS) {
+    const geometry = registry.track(
+      new THREE.CylinderGeometry(
+        tier.topRadius,
+        tier.bottomRadius,
+        tier.height,
+        DAIS_FACETS,
+      ),
+    );
+    const mesh = new THREE.Mesh(
+      geometry,
+      tier.name === 'deck' ? deckMaterial : daisMaterial,
+    );
+    /* CylinderGeometry is centred on its own origin, so the tier's top face
+       lands at topY by dropping the centre half its height. */
+    mesh.position.set(0, tier.topY - tier.height / 2, 0);
+    scene.add(mesh);
+  }
+
+  /* --- Deck rim ----------------------------------------------------- */
+  /*
+   * A neon edge on the lip. Cyan is a thin line accent and this is one, but
+   * magenta is the right call here: the rim traces the boundary between the
+   * arena and the water, and the grid ocean it meets is already magenta.
+   *
+   * A TorusGeometry rather than a Line, because a line is one pixel wide at
+   * any distance and this needs to read as an edge with a glow, not a
+   * hairline. Emissive above the bloom threshold so the pass finds it.
+   */
+  const rimGeometry = registry.track(
+    new THREE.TorusGeometry(DAIS_TIERS[0]!.topRadius, 0.045, 6, DAIS_FACETS * 2),
+  );
+  const rimMaterial = registry.track(
+    new THREE.MeshBasicMaterial({ color: PALETTE.horizon }),
+  );
+  const rim = new THREE.Mesh(rimGeometry, rimMaterial);
+  rim.rotation.x = -Math.PI / 2;
+  /* On the deck's own edge, a hair below the face so it cannot z-fight with
+     the contact shadows sitting at y 0.012. */
+  rim.position.set(0, -0.02, 0);
+  scene.add(rim);
+
+  /* --- Colonnade ---------------------------------------------------- */
+  /*
+   * Five columns on an arc behind the fight, from arena.ts. It was two, at
+   * the extreme left and right, which read as a doorway the battle happened
+   * in front of rather than a room it happened inside.
+   *
+   * Positions are constrained rather than placed: behind the line of battle,
+   * on the deck, clear of every character. arena.test.ts asserts that against
+   * the real cast layout, so re-laying out the party fails there rather than
+   * in a screenshot three changes later.
+   */
+  const COLUMN_HEIGHT = 6.4;
+  const columnGeometry = registry.track(
+    new THREE.CylinderGeometry(0.26, 0.34, COLUMN_HEIGHT, COLUMN_FACETS),
+  );
   const columnMaterial = registry.track(
     new THREE.MeshStandardMaterial({
       color: PALETTE.chrome,
       /* Roughness broadens and dims the key-light glint. At 0.15 the highlight
          was a pinpoint that clipped to white and bloomed into a harsh star;
          0.5 spreads it into a soft sheen the bloom pass no longer blows out.
-         Emissive neon is unaffected, so grid/sun/edge glow is unchanged. */
+         Emissive neon is unaffected, so grid/sun/edge glow is unchanged.
+         Held at 0.5 while the dais goes to 0.18: a column is a narrow
+         near-vertical sliver, so a sharp reflection on one is a hard streak
+         rather than a picture of the sky. */
       roughness: 0.5,
       metalness: 0.9,
+      envMapIntensity: 0.5,
+      flatShading: true,
     }),
   );
-  for (const x of [-5.2, 5.2]) {
+
+  /* A magenta band on each column, the same accent as the deck rim. Shared
+     geometry and material across all of them, so it is one more draw call
+     each and no more allocations.
+
+     Its height is a FRAMING number, not a decorative one. It started near the
+     top of the column, where nothing could see it: the columns are 6.4 tall
+     and run off the top of the frame, so a band at 5.5 sits about half a
+     degree outside the fov. Anything meant to be seen on a column has to be
+     below roughly y 4.5. */
+  const collarGeometry = registry.track(
+    new THREE.CylinderGeometry(0.3, 0.3, 0.14, COLUMN_FACETS),
+  );
+  const collarMaterial = registry.track(
+    new THREE.MeshBasicMaterial({ color: PALETTE.horizon }),
+  );
+
+  for (const position of colonnadePositions()) {
     const column = new THREE.Mesh(columnGeometry, columnMaterial);
-    column.position.set(x, 2.7, -1.5);
+    column.position.set(position.x, COLUMN_HEIGHT / 2, position.z);
     scene.add(column);
+
+    const collar = new THREE.Mesh(collarGeometry, collarMaterial);
+    collar.position.set(position.x, 4.2, position.z);
+    scene.add(collar);
   }
 
   /* --- Floating polyhedra ----------------------------------------- */
@@ -512,6 +684,10 @@ export function createBattleScene(rng: Rng): BattleScene {
       emissiveIntensity: 0.35,
       roughness: 0.7,
       metalness: 0.35,
+      /* Low. These were tuned against the bloom threshold with no environment
+         at all, and scene.environment reaches every MeshStandardMaterial --
+         so without this the arena pass would quietly re-light the dice. */
+      envMapIntensity: 0.25,
       flatShading: true,
     }),
   );
@@ -665,6 +841,116 @@ function createGradientTexture(): THREE.CanvasTexture {
   ctx.fillRect(0, 0, 4, size);
 
   const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** `#rrggbb` for a palette entry, so the canvas API can take it. */
+function hex(colour: number): string {
+  return `#${colour.toString(16).padStart(6, '0')}`;
+}
+
+/**
+ * Paints what the chrome reflects: an equirectangular sky, from the palette.
+ *
+ * An APPROXIMATION of the scene, not a capture of it. The real thing would be
+ * a cube render, which costs a renderer reference createBattleScene does not
+ * have and a per-frame update nothing here needs -- the camera is locked and
+ * the environment is static.
+ *
+ * THE LAYOUT IS DICTATED BY three's EQUIRECT CONVENTION, not chosen:
+ *
+ *   u = atan2(dir.z, dir.x) / 2pi + 0.5     v = asin(dir.y) / pi + 0.5
+ *
+ * so u 0.25 is -Z, which is where the sun is; u 0.75 is +Z, behind the
+ * camera; u 0 and u 0.5 are the two sides, which is where the mountain banks
+ * are. v 0.5 is the horizon, and a CanvasTexture flips Y, so canvas row 0 is
+ * straight up. Move the sun in the scene and this has to move with it or the
+ * platform reflects a sunset that is not there.
+ */
+function createEnvironmentTexture(): THREE.CanvasTexture {
+  const width = 512;
+  const height = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) {
+    throw new Error('2D canvas context unavailable -- cannot build environment');
+  }
+
+  const horizon = height / 2;
+
+  /* Sky and water as one vertical ramp. The water half is lighter than the
+     sky because the grid ocean is live magenta line work and the terrain
+     below the camera is closer, so a reflection pointing down should not go
+     black. */
+  const vertical = ctx.createLinearGradient(0, 0, 0, height);
+  vertical.addColorStop(0, hex(PALETTE.void));
+  vertical.addColorStop(0.45, hex(PALETTE.void));
+  vertical.addColorStop(0.5, hex(PALETTE.plum));
+  vertical.addColorStop(0.66, hex(PALETTE.ridge));
+  vertical.addColorStop(1, hex(PALETTE.void));
+  ctx.fillStyle = vertical;
+  ctx.fillRect(0, 0, width, height);
+
+  /* The sunset band, brightest at the sun's azimuth and falling off around
+     the compass. This is most of what a mirrored surface actually shows -- a
+     sun is a small bright dot, but the glow around it is broad enough to
+     paint a whole reflection warm.
+
+     KEPT DELIBERATELY DIM. A near-horizontal deck under this camera reflects
+     almost one direction -- about 8 degrees up, straight down -Z, which is
+     exactly where the sun is -- so every pixel of the floor samples the same
+     few texels. Paint those bright and the deck is not a reflection, it is a
+     flat fill in whatever colour they happen to be. */
+  const sunU = 0.25;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const azimuth = ctx.createLinearGradient(0, 0, width, 0);
+  azimuth.addColorStop(0, 'rgba(157, 70, 30, 0)');
+  azimuth.addColorStop(sunU, 'rgba(232, 135, 58, 0.75)');
+  azimuth.addColorStop(0.5, 'rgba(157, 70, 30, 0)');
+  azimuth.addColorStop(1, 'rgba(157, 70, 30, 0)');
+  ctx.fillStyle = azimuth;
+  ctx.fillRect(0, horizon - height * 0.09, width, height * 0.11);
+
+  /* The disc itself, a little above the horizon -- the sun sits at y 5.31,
+     z -100, which is about 3 degrees up. Small: it is the thing that gives a
+     polished surface a highlight to catch, not the thing that lights it. */
+  const sunX = sunU * width;
+  const sunY = horizon - height * (3 / 180);
+  const disc = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, height * 0.11);
+  disc.addColorStop(0, 'rgba(255, 230, 109, 0.85)');
+  disc.addColorStop(0.4, 'rgba(255, 154, 60, 0.5)');
+  disc.addColorStop(1, 'rgba(255, 45, 149, 0)');
+  ctx.fillStyle = disc;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+
+  /* The banks, at the two sides. Dark mass either hand is a real feature of
+     this scene and a mirror that omits it reflects an open plain. */
+  ctx.save();
+  ctx.fillStyle = hex(PALETTE.ridge);
+  ctx.globalAlpha = 0.55;
+  for (const centre of [0, 0.5, 1]) {
+    const bankGradient = ctx.createLinearGradient(
+      (centre - 0.14) * width,
+      0,
+      (centre + 0.14) * width,
+      0,
+    );
+    bankGradient.addColorStop(0, 'rgba(74, 21, 51, 0)');
+    bankGradient.addColorStop(0.5, hex(PALETTE.ridge));
+    bankGradient.addColorStop(1, 'rgba(74, 21, 51, 0)');
+    ctx.fillStyle = bankGradient;
+    ctx.fillRect(0, horizon - height * 0.1, width, height * 0.14);
+  }
+  ctx.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.mapping = THREE.EquirectangularReflectionMapping;
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }

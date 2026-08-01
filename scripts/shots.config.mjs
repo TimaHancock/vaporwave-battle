@@ -125,6 +125,26 @@ export const SHOTS = [
     clip: { x: 0, y: 0.02, width: 1, height: 0.62 },
   },
   {
+    name: 'arena',
+    description:
+      'The stage itself: the faceted dais, its neon rim, and the colonnade ' +
+      'behind the fight. The questions no assertion can answer -- does the ' +
+      'chrome read as METAL REFLECTING A SUNSET, or as painted plastic? Do ' +
+      'the drum facets separate into planes, or average back into a smooth ' +
+      'cylinder? Is the deck dark enough that the cast reads against it, ' +
+      'given it is the largest unbroken surface in the lower frame? Are the ' +
+      'contact shadows still visible on it -- they were tuned against a pale ' +
+      'platform and this one is dark. And does the colonnade read as a room ' +
+      'rather than as a doorway?',
+    seed: 1337,
+    time: 1.0,
+    /* A scene shot, so `viewport` rather than `scale`. Cropped to the deck
+       and the column bases: the top of a column is off frame by design and
+       adds nothing to the question. */
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0.04, y: 0.42, width: 0.92, height: 0.44 },
+  },
+  {
     name: 'damage_numbers',
     description:
       'One turn resolved, with the floating numbers held open. The questions ' +
