@@ -9,9 +9,13 @@ import {
   DAIS_TIERS,
   daisBottomY,
   daisMaxRadius,
+  DECK_RINGS,
+  DEFAULT_DECK,
   HORIZON_Y,
   inscribedRadius,
+  routeDeck,
 } from './arena';
+import { createRng } from '../rng';
 import { sunWindowHalfWidth } from './mountains';
 import {
   DEFAULT_BOSS_LAYOUT,
@@ -185,6 +189,93 @@ describe('colonnadePositions', () => {
 
   it('rejects an empty colonnade', () => {
     expect(() => colonnadePositions(0)).toThrow(/at least 1 column/);
+  });
+});
+
+describe('routeDeck', () => {
+  it('keeps every point on the deck', () => {
+    /* A trace that leaves the unit disc is drawn on a part of the texture the
+       cap UVs never sample -- so it is not clipped, it simply is not there,
+       and the deck quietly loses whatever ran off. */
+    for (let seed = 1; seed <= 60; seed++) {
+      const art = routeDeck(createRng(seed));
+      for (const trace of art.traces) {
+        for (const point of trace.points) {
+          expect(Math.hypot(point.x, point.y), `seed ${seed}`).toBeLessThanOrEqual(1);
+        }
+      }
+      for (const pad of art.pads) {
+        expect(Math.hypot(pad.x, pad.y), `seed ${seed} pad`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('routes every segment at a right angle', () => {
+    /* THE PROPERTY THAT MAKES IT A CIRCUIT rather than a scribble, and
+       exactly the kind of thing that degrades silently: one loose bit of
+       arithmetic and the traces become diagonals, which read as scratches on
+       the floor. */
+    for (let seed = 1; seed <= 60; seed++) {
+      for (const trace of routeDeck(createRng(seed)).traces) {
+        for (let i = 1; i < trace.points.length; i++) {
+          const from = trace.points[i - 1]!;
+          const to = trace.points[i]!;
+          const axisAligned =
+            Math.abs(to.x - from.x) < 1e-9 || Math.abs(to.y - from.y) < 1e-9;
+          expect(axisAligned, `seed ${seed} segment ${i}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('never emits a zero-length segment', () => {
+    /* A repeated point is a corner that does not turn -- invisible, and it
+       costs a line join to draw. */
+    for (const trace of routeDeck(createRng(1337)).traces) {
+      for (let i = 1; i < trace.points.length; i++) {
+        const from = trace.points[i - 1]!;
+        const to = trace.points[i]!;
+        expect(Math.hypot(to.x - from.x, to.y - from.y)).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('gives every trace something to draw', () => {
+    for (const trace of routeDeck(createRng(1337)).traces) {
+      expect(trace.points.length).toBeGreaterThan(1);
+      expect(trace.width).toBeGreaterThan(0);
+    }
+  });
+
+  it('actually routes something at the shipped settings', () => {
+    /* A deck that came back empty would pass every rule above. */
+    const art = routeDeck(createRng(1337));
+    expect(art.traces.length).toBeGreaterThan(10);
+    expect(art.pads.length).toBe(DEFAULT_DECK.traceCount);
+    expect(art.rings).toEqual([...DECK_RINGS]);
+  });
+
+  it('is deterministic for a seed, and different across seeds', () => {
+    expect(routeDeck(createRng(1337))).toEqual(routeDeck(createRng(1337)));
+    expect(routeDeck(createRng(1))).not.toEqual(routeDeck(createRng(2)));
+  });
+
+  it('is finite everywhere', () => {
+    /* A NaN coordinate does not throw in a canvas -- it silently drops the
+       path, so one bad trace vanishes and the rest look fine. */
+    for (let seed = 1; seed <= 30; seed++) {
+      const art = routeDeck(createRng(seed));
+      const bad = art.traces
+        .flatMap((trace) => trace.points)
+        .filter((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y));
+      expect(bad, `seed ${seed}`).toEqual([]);
+    }
+  });
+
+  it('rejects a step that would not advance', () => {
+    expect(() => routeDeck(createRng(1), { ...DEFAULT_DECK, step: 0 })).toThrow(
+      /must be positive/,
+    );
   });
 });
 

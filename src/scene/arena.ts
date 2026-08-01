@@ -21,6 +21,7 @@
 
 import { PLATFORM_RADIUS, PLATFORM_SAFE_RADIUS, type Vec3 } from './spriteLayout';
 import { sunWindowHalfWidth } from './mountains';
+import type { Rng } from '../rng';
 
 /**
  * The waterline, mirrored from `battleScene.ts` and `mountains.ts`.
@@ -174,6 +175,161 @@ export function colonnadePositions(
   }
   /* Left to right, so the array reads the way the arc looks. */
   return positions.sort((a, b) => a.x - b.x);
+}
+
+/* ------------------------------------------------------------------ */
+/* Deck markings                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Circuit traces on the deck face, in normalised disc coordinates.
+ *
+ * WHY THE DECK NEEDS MARKINGS AT ALL, stated once: it is flat and horizontal,
+ * so every pixel of it reflects nearly the same direction and it can only be
+ * one value. Facets do nothing for a plane. Line work is the only thing that
+ * gives a floor this size any structure, and it is what the contact shadows
+ * have to darken -- on an unmarked dark deck a dark shadow lands on nothing.
+ *
+ * The motif compounds rather than being picked: the SideQuest Cyber header is
+ * circuit traces, and CLAUDE.md has circuit-trace clouds as the next
+ * art-directed element. Building the vocabulary here means the clouds inherit
+ * it instead of inventing a second language.
+ *
+ * COORDINATES ARE THE UNIT DISC, x and y in -1..1 with x^2 + y^2 <= 1. The
+ * rasteriser owns resolution and this owns layout, which is what keeps the
+ * routing under Vitest -- the test environment is `node` and has no canvas.
+ */
+
+export interface Vec2 {
+  x: number;
+  y: number;
+}
+
+export interface Trace {
+  /** Corner points of a polyline. Every segment is axis-aligned. */
+  points: readonly Vec2[];
+  /** Stroke width, as a share of the disc's radius. */
+  width: number;
+}
+
+export interface Pad {
+  x: number;
+  y: number;
+  /** As a share of the disc's radius. */
+  radius: number;
+}
+
+export interface DeckArt {
+  traces: Trace[];
+  pads: Pad[];
+  /** Concentric ring radii, 0..1. */
+  rings: number[];
+}
+
+export interface DeckOptions {
+  /** How many traces to route. */
+  traceCount: number;
+  /** Maximum corners in one trace. */
+  maxSegments: number;
+  /** Length of one step, as a share of the disc's radius. */
+  step: number;
+  /** How far out a trace may start. Keeps the centre readable. */
+  innerRadius: number;
+}
+
+export const DEFAULT_DECK: DeckOptions = {
+  /* MANY, FINE AND SHORT. The first pass was 26 traces at three times this
+     width and twice the step, and it came out a Tron floor: line work so
+     heavy it became the subject of the frame and made cyan its dominant
+     colour, which is the exact thing the palette rule forbids. Circuitry
+     reads as circuitry by being FINE -- density is what carries the motif,
+     not weight. */
+  traceCount: 70,
+  maxSegments: 6,
+  step: 0.07,
+  innerRadius: 0.14,
+};
+
+/**
+ * The rings that give the arena a centre.
+ *
+ * A circuit board is uniform by nature and an arena is not -- there is a
+ * middle, and the fight happens around it. The rings are what a hex tiling
+ * could not have supplied, and they are also the one element that reads from
+ * the back of the frame where individual traces are a pixel wide.
+ */
+export const DECK_RINGS: readonly number[] = [0.2, 0.34, 0.86];
+
+/**
+ * Route the deck.
+ *
+ * Manhattan walk: start on a pad, step along an axis, turn at right angles,
+ * stop at the rim or when the step budget runs out. Right angles are the
+ * whole motif -- a diagonal reads as a scratch, not as a trace -- so turning
+ * is the only thing the rng decides about direction.
+ *
+ * Seeded. `Math.random()` is banned project-wide and the shot baseline needs
+ * one seed to give one arena.
+ */
+export function routeDeck(rng: Rng, options: DeckOptions = DEFAULT_DECK): DeckArt {
+  const { traceCount, maxSegments, step, innerRadius } = options;
+
+  if (traceCount < 0) throw new Error(`Trace count cannot be negative`);
+  if (step <= 0) throw new Error(`Deck step must be positive, got ${step}`);
+
+  const traces: Trace[] = [];
+  const pads: Pad[] = [];
+
+  /* Axis-aligned unit steps, in the order the walk rotates through them. */
+  const headings: readonly Vec2[] = [
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 0, y: -1 },
+  ];
+
+  for (let i = 0; i < traceCount; i++) {
+    /* Start somewhere on the annulus between innerRadius and the rim. sqrt
+       spreads starts by AREA rather than by radius -- without it every trace
+       bunches toward the middle, where the disc has least room. */
+    const angle = rng.next() * Math.PI * 2;
+    const radius = innerRadius + Math.sqrt(rng.next()) * (0.94 - innerRadius);
+    let x = Math.cos(angle) * radius;
+    let y = Math.sin(angle) * radius;
+
+    pads.push({ x, y, radius: 0.005 + rng.next() * 0.005 });
+
+    const points: Vec2[] = [{ x, y }];
+    let heading = rng.int(0, 3);
+    const segments = 2 + rng.int(0, Math.max(maxSegments - 2, 0));
+
+    for (let segment = 0; segment < segments; segment++) {
+      const run = step * (1 + rng.int(0, 2));
+      const direction = headings[heading]!;
+      const nextX = x + direction.x * run;
+      const nextY = y + direction.y * run;
+
+      /* Stop at the rim rather than clamping to it. A clamped point sits
+         exactly on the edge and every trace that ran out ends in the same
+         place, which reads as a ring of stubs. */
+      if (Math.hypot(nextX, nextY) > 0.95) break;
+
+      x = nextX;
+      y = nextY;
+      points.push({ x, y });
+
+      /* Turn a quarter, either way. Never straight on -- a straight
+         continuation is the same segment with an extra vertex in it. */
+      heading = (heading + (rng.chance(0.5) ? 1 : 3)) % 4;
+    }
+
+    /* A single point is a pad, and it already has one. */
+    if (points.length > 1) {
+      traces.push({ points, width: 0.0016 + rng.next() * 0.0016 });
+    }
+  }
+
+  return { traces, pads, rings: [...DECK_RINGS] };
 }
 
 /**

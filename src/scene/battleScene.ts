@@ -26,6 +26,8 @@ import {
   COLUMN_FACETS,
   DAIS_FACETS,
   DAIS_TIERS,
+  routeDeck,
+  type DeckArt,
 } from './arena';
 /* Type-only, so it erases at build time -- the scene shares battle
    vocabulary without taking a dependency on battle logic. */
@@ -557,12 +559,24 @@ export function createBattleScene(rng: Rng): BattleScene {
    * the same direction and it can only ever be ONE VALUE. Facets do nothing
    * for it. Breaking it up is what the deck markings are for.
    */
+  const deckTexture = registry.track(
+    createDeckTexture(routeDeck(createRng(rng.seed))),
+  );
   const deckMaterial = registry.track(
     new THREE.MeshStandardMaterial({
       color: PALETTE.plum,
       roughness: 0.45,
       metalness: 0.9,
       envMapIntensity: 0.6,
+      /* White, so the canvas carries the colour rather than tinting it a
+         second time. Black pixels in the map emit nothing and the metal
+         shows through. */
+      emissive: 0xffffff,
+      emissiveMap: deckTexture,
+      /* Low. Emissive on a pure cyan map is neon tubing at anything near 1,
+         and this is meant to be line work INLAID in a floor -- lit enough to
+         read, not lit enough to light the room. */
+      emissiveIntensity: 0.3,
       flatShading: true,
     }),
   );
@@ -842,6 +856,84 @@ function createGradientTexture(): THREE.CanvasTexture {
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
+ * Rasterises the deck's circuit traces into a texture.
+ *
+ * Layout comes from `routeDeck` in arena.ts and resolution is decided here --
+ * the split exists because the Vitest environment is `node` and has no canvas,
+ * so the part worth asserting has to stay off it.
+ *
+ * USED AS AN emissiveMap, WHICH IS WHY THE CANVAS IS BLACK. `emissive` is set
+ * to white on the material, so this canvas carries the colour on its own and
+ * black means "no emission here" -- the metal underneath shows through
+ * untouched. Painting the deck's base colour in would fight the reflection
+ * instead of sitting on it.
+ *
+ * A square canvas maps straight onto a CylinderGeometry cap: three's cap UVs
+ * put the circle in a centred unit disc, which is the same space arena.ts
+ * routes in.
+ */
+function createDeckTexture(art: DeckArt, size = 1024): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) {
+    throw new Error('2D canvas context unavailable -- cannot build deck art');
+  }
+
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, size, size);
+
+  const centre = size / 2;
+  /* Disc coordinates are -1..1; the cap's UV disc is half the texture. */
+  const scale = size / 2;
+  const at = (value: number): number => centre + value * scale;
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  /* Rings first, so traces cross over them rather than under. */
+  ctx.strokeStyle = hex(PALETTE.horizon);
+  for (const radius of art.rings) {
+    ctx.lineWidth = Math.max(size * 0.0022, 1);
+    ctx.beginPath();
+    ctx.arc(centre, centre, radius * scale, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  /* Traces in cyan: thin line work, which is the only thing the palette rule
+     allows cyan to be, and the motif the site header already uses. */
+  ctx.strokeStyle = hex(PALETTE.signal);
+  for (const trace of art.traces) {
+    ctx.lineWidth = Math.max(trace.width * scale, 1);
+    ctx.beginPath();
+    ctx.moveTo(at(trace.points[0]!.x), at(trace.points[0]!.y));
+    for (let i = 1; i < trace.points.length; i++) {
+      ctx.lineTo(at(trace.points[i]!.x), at(trace.points[i]!.y));
+    }
+    ctx.stroke();
+  }
+
+  /* Pads last and brighter: they are where a trace begins, and a circuit
+     without them reads as a maze. */
+  ctx.fillStyle = hex(PALETTE.signal);
+  for (const pad of art.pads) {
+    ctx.beginPath();
+    ctx.arc(at(pad.x), at(pad.y), Math.max(pad.radius * scale, 1), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  /* The deck is a large surface seen at a shallow angle, which is the worst
+     case for aliasing: without anisotropy the traces crawl and shimmer as
+     nothing moves. */
+  texture.anisotropy = 8;
   return texture;
 }
 
