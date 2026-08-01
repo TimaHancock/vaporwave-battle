@@ -22,11 +22,13 @@ import {
   type BankOptions,
 } from './mountains';
 import {
+  arenaEmission,
   colonnadePositions,
   COLUMN_FACETS,
   DAIS_FACETS,
   DAIS_TIERS,
   routeDeck,
+  type ArenaMood,
   type DeckArt,
 } from './arena';
 /* Type-only, so it erases at build time -- the scene shares battle
@@ -102,6 +104,15 @@ export const PALETTE = {
   /** Cyan. THIN LINE ACCENTS ONLY. Never a fill, never a broad light. */
   signal: 0x22e0ff,
 } as const;
+
+/**
+ * The deck's trace emission with the fight at rest.
+ *
+ * `setMood` scales it. Held as a constant rather than read back off the
+ * material, because after one scaling the material no longer knows where it
+ * started -- the same reason the rim keeps its rest colour.
+ */
+const DECK_EMISSIVE_REST = 0.3;
 
 /* ------------------------------------------------------------------ */
 /* Disposal registry                                                   */
@@ -193,6 +204,16 @@ export interface BattleScene {
   clearCast(): void;
   /** Advance ambient animation to an absolute time, in seconds. */
   update(elapsedSeconds: number): void;
+  /**
+   * Point the arena's neon at the state of the fight.
+   *
+   * READ-ONLY on the caller's side of the line: the renderer is handed two
+   * numbers already on screen in the HUD and never writes back. Fed from
+   * `refresh()` in main.ts, which is the single place the interface is
+   * rebuilt from state -- so the arena cannot be describing a moment the
+   * cards and the log are not.
+   */
+  setMood(mood: ArenaMood): void;
   dispose(): void;
 }
 
@@ -576,7 +597,7 @@ export function createBattleScene(rng: Rng): BattleScene {
       /* Low. Emissive on a pure cyan map is neon tubing at anything near 1,
          and this is meant to be line work INLAID in a floor -- lit enough to
          read, not lit enough to light the room. */
-      emissiveIntensity: 0.3,
+      emissiveIntensity: DECK_EMISSIVE_REST,
       flatShading: true,
     }),
   );
@@ -613,6 +634,13 @@ export function createBattleScene(rng: Rng): BattleScene {
   const rimGeometry = registry.track(
     new THREE.TorusGeometry(DAIS_TIERS[0]!.topRadius, 0.045, 6, DAIS_FACETS * 2),
   );
+  /* MeshBasicMaterial has no `emissiveIntensity`, so the reactive brightness
+     rides on `color` -- scaled past 1 into HDR, which is exactly what the
+     bloom pass is looking for. `restColour` is the value it scales from, held
+     because a colour that has been scaled cannot be scaled back to where it
+     started without knowing where that was. */
+  const rimRestColour = new THREE.Color(PALETTE.horizon);
+  const rimHotColour = new THREE.Color(PALETTE.ember);
   const rimMaterial = registry.track(
     new THREE.MeshBasicMaterial({ color: PALETTE.horizon }),
   );
@@ -670,6 +698,7 @@ export function createBattleScene(rng: Rng): BattleScene {
   const collarMaterial = registry.track(
     new THREE.MeshBasicMaterial({ color: PALETTE.horizon }),
   );
+  const collarRestColour = new THREE.Color(PALETTE.horizon);
 
   for (const position of colonnadePositions()) {
     const column = new THREE.Mesh(columnGeometry, columnMaterial);
@@ -809,6 +838,24 @@ export function createBattleScene(rng: Rng): BattleScene {
     },
 
     clearCast,
+
+    setMood(mood: ArenaMood) {
+      const { rim, deck, heat } = arenaEmission(mood);
+
+      /* One hue ramp shared by the rim and the collars, so the arena speaks
+         with one voice: magenta at full boss HP, running toward ember as the
+         fight goes on. Scaling PAST 1 is deliberate -- the values leave the
+         displayable range and land in the bloom pass's threshold, which is
+         what turns "brighter" into "glowing" rather than "washed out". */
+      rimMaterial.color.copy(rimRestColour).lerp(rimHotColour, heat * 0.7);
+      rimMaterial.color.multiplyScalar(rim);
+
+      collarMaterial.color.copy(collarRestColour).lerp(rimHotColour, heat * 0.7);
+      collarMaterial.color.multiplyScalar(rim);
+
+      /* The deck has a real emissiveIntensity, so it does not need the trick. */
+      deckMaterial.emissiveIntensity = DECK_EMISSIVE_REST * deck;
+    },
 
     update(elapsedSeconds: number) {
       for (const die of dice) {

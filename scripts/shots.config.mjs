@@ -145,6 +145,32 @@ export const SHOTS = [
     clip: { x: 0.04, y: 0.42, width: 0.92, height: 0.44 },
   },
   {
+    name: 'arena_charged',
+    description:
+      'The same stage with the fight running hot: a chain built up and the ' +
+      'boss badly hurt, so the rim and the deck traces are at the top of ' +
+      'their ramp and the neon has run from magenta toward ember. Read it ' +
+      'AGAINST arena.png -- the question is whether the difference is ' +
+      'legible as a state change without being a light show, and whether a ' +
+      'brighter deck starts to swallow the contact shadows again.',
+    seed: 1337,
+    time: 1.0,
+    /* THREE Enters, not four. The party is four, so a fourth submission lets
+       the round complete and the boss act -- and the boss connecting is the
+       only thing that breaks a chain, so a four-key shot photographs the
+       arena at chain 0 with only the colour shift showing. Three leaves one
+       member still to act and catches the chain mid-build.
+
+       `bossHp` shortens the boss so those hits also move the HP fraction far
+       enough for the colour to travel; at full strength the boss loses a few
+       percent and `heat` stays near zero. */
+    query: 'stepMs=0&bossHp=900',
+    keys: ['Enter', 'Enter', 'Enter'],
+    settle: true,
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0.04, y: 0.42, width: 0.92, height: 0.44 },
+  },
+  {
     name: 'damage_numbers',
     description:
       'One turn resolved, with the floating numbers held open. The questions ' +

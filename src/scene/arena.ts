@@ -332,6 +332,89 @@ export function routeDeck(rng: Rng, options: DeckOptions = DEFAULT_DECK): DeckAr
   return { traces, pads, rings: [...DECK_RINGS] };
 }
 
+/* ------------------------------------------------------------------ */
+/* Reactive emission                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What the arena knows about the fight.
+ *
+ * DELIBERATELY TINY. The renderer reads `BattleState` and never writes to it,
+ * and the smaller the surface it reads the less there is to drift: two
+ * numbers, both already on screen in the HUD, so the arena can never be
+ * describing a moment the interface is not.
+ */
+export interface ArenaMood {
+  /** The chain counter. 0 or 1 is a resting arena. */
+  chain: number;
+  /** Boss HP as a fraction of its maximum, 1 at full. */
+  bossHpFraction: number;
+}
+
+/** How bright the arena's neon runs, and how hot its colour is. */
+export interface ArenaEmission {
+  /** Multiplier on the rim and column collars. */
+  rim: number;
+  /** Multiplier on the deck's trace emission. */
+  deck: number;
+  /**
+   * 0 at full boss HP, 1 at nothing left.
+   *
+   * A MIX, NOT A COLOUR. arena.ts has no palette -- battleScene decides which
+   * two colours this runs between, exactly as it does for the terrain's
+   * `shade`.
+   */
+  heat: number;
+}
+
+/**
+ * Chain at which the arena is as bright as it gets.
+ *
+ * FIVE, because of how the chain actually behaves rather than because it is a
+ * round number. `nextChain` breaks the count the moment the party takes
+ * damage, and the party is four -- so four landed hits is one clean round and
+ * a fifth means the boss's turn did no damage either. That is a real
+ * achievement and the top of the ramp should mean something. A larger figure
+ * would put the arena's whole response into a band the game never reaches.
+ */
+export const CHAIN_FULL_BRIGHT = 5;
+
+const RIM_REST = 1;
+const RIM_PEAK = 2.6;
+const DECK_REST = 1;
+const DECK_PEAK = 2.2;
+
+/**
+ * Map the fight onto how the arena is lit.
+ *
+ * Pure, so "does the arena get hotter as the fight goes on" is a Vitest
+ * question rather than a screenshot one -- and it is a question worth asking
+ * in a form that cannot be answered by looking at one moment of one seed.
+ *
+ * The response is to the CHAIN rather than to the turn count because the
+ * chain is the thing the player is building and already watching: the counter
+ * over the boss and the arena under their feet then say the same thing twice,
+ * which is what makes it read as feedback rather than as ambience.
+ */
+export function arenaEmission(mood: ArenaMood): ArenaEmission {
+  const chain = Number.isFinite(mood.chain) ? Math.max(mood.chain, 0) : 0;
+  const fraction = Number.isFinite(mood.bossHpFraction) ? mood.bossHpFraction : 1;
+
+  /* A chain of 1 is just a hit -- the same threshold the float layer's
+     counter uses, and for the same reason. */
+  const t = clamp01((chain - 1) / (CHAIN_FULL_BRIGHT - 1));
+
+  return {
+    rim: RIM_REST + (RIM_PEAK - RIM_REST) * t,
+    deck: DECK_REST + (DECK_PEAK - DECK_REST) * t,
+    heat: 1 - clamp01(fraction),
+  };
+}
+
+function clamp01(value: number): number {
+  return Math.min(Math.max(value, 0), 1);
+}
+
 /**
  * Closest a column may come to anyone standing on the deck, in world units.
  *

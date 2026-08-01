@@ -268,6 +268,51 @@ on a legitimately unlocked battle.
   party size can overflow, and `bossPosition()` rejects a boss past the lip
   -- do not bypass either by positioning sprites by hand. A sprite past the
   lip stands on nothing and its shadow floats.
+- **A METAL WITH NO ENVIRONMENT MAP HAS NO DIFFUSE.** The single most useful
+  thing learnt about this scene. A metallic surface shows you what it
+  reflects; with nothing to reflect, `metalness: 0.8` means 80% of the
+  material is inert and what you see is the 20% dielectric remainder catching
+  the key light. That is why the old platform read as painted plastic, and it
+  is not fixable by tuning `metalness` or `roughness` — those were being
+  tuned against a different problem. `scene.environment` in `battleScene.ts`
+  carries an equirect painted from the palette by `createEnvironmentTexture`.
+- **`scene.environment` reaches EVERY `MeshStandardMaterial`** — dais,
+  columns *and dice*. It is a scene-wide decision wearing a platform-shaped
+  hat, and `envMapIntensity` per material is where each surface says how much
+  of it it wants. The dice hold theirs low because they were tuned against
+  the bloom threshold with no environment at all.
+- **A metal's reflection is tinted by its own colour.** The deck at
+  `PALETTE.chrome` could only ever be bright, whatever the environment did —
+  it came out a cream sheet that outshone the cast. The deck is dark and the
+  columns stayed chrome: a large field that should recede and a narrow
+  vertical that can carry a highlight are different problems.
+- **The deck is flat, so facets do nothing for it.** Every pixel of a
+  horizontal plane reflects nearly the same direction under a locked camera,
+  which is one value however it is lit. The circuit traces are what give it
+  structure — *and* what the contact shadows darken. On an unmarked dark deck
+  a dark shadow lands on nothing, which is how stage 1 briefly lost the
+  grounding that stops flat art reading as pasted on.
+- **Circuitry reads by being FINE.** The first trace pass was heavy enough to
+  become the subject of the frame and made cyan its dominant colour — the
+  exact thing the palette rule forbids. Density carries the motif, not
+  weight.
+- **Faceting costs you the inscribed radius.** A 16-gon of circumradius 6 is
+  5.885 across at the middle of a face, so the usable deck is smaller than
+  `PLATFORM_RADIUS` suggests. Cut it fine enough and a sprite at the safe
+  radius stands over a notch in the polygon. `arena.test.ts` asserts the
+  clearance rather than leaving it to look about right.
+- **The dais is planted in the water, not resting on it.** It used to bottom
+  out exactly at `HORIZON_Y`, which is why it read as a coin lying on a
+  surface. The footing goes below; everything under the waterline is in dark
+  water and costs nothing to be there.
+- **Nothing may stand in front of the sun — including a column.** Columns
+  spread evenly across the back arc put one dead centre at an odd count,
+  splitting the disc. `columnIsClear` checks against `sunWindowHalfWidth`
+  from `mountains.ts`, so the terrain and the arena obey one rule and moving
+  `SUN_WINDOW_FRACTION` moves both.
+- **Anything meant to be seen on a column has to be below about y 4.5.** The
+  columns are 6.4 tall and run off the top of frame; a detail at 5.5 is about
+  half a degree outside the fov and simply invisible.
 - **Composition is party-left, boss-right.** Party of 4 via `layoutParty`,
   boss via `DEFAULT_BOSS_PLACEMENT`. The e2e suite asserts both halves; a
   scene with no boss used to pass the left-half check on its own.
@@ -291,6 +336,12 @@ on a legitimately unlocked battle.
 - **Debug state is published off the render loop too.** In `?time=` step
   mode `drawFrame` runs once, so a snapshot built only there would freeze
   `isLocked` at its boot value while the UI carried on.
+- **And so is the FRAME, now that the scene reacts to state.** `refresh()`
+  redraws in step mode, at `currentTime` rather than a fresh clock read — so
+  materials driven by `setMood` reach the screen while ambient animation
+  stays frozen and a stepped frame stays reproducible. Without it every
+  screenshot showed the arena at its opening value however the fight had
+  gone, and the reactive layer looked broken when it was only unrendered.
 - **Enemy beats are slower than player beats**, by
   `ENEMY_BEAT_MULTIPLIER` (3×), and an enemy turn opens with a line naming
   who is acting. A player beat confirms something they chose and were
@@ -503,10 +554,33 @@ image, and no number of layers gets you there. What survived the rewrite is
 the constraint — the sun's window — generalised from three chosen depths to
 every row.
 
+**The arena is a stage now.** A faceted dais of four tiers — deck, chamfer,
+drum, footing — planted in the water, with a neon rim, circuit traces engraved
+into the deck face, and a colonnade on an arc behind the fight. `scene/arena.ts`
+is the pure module behind it, the same split `mountains.ts` follows:
+`DAIS_TIERS`, `colonnadePositions`, `routeDeck` and `arenaEmission` are maths
+and data; `battleScene.ts` builds meshes and rasterises.
+
+It reacts to the fight. `arenaEmission` maps the chain and the boss's HP onto
+how bright the neon runs and how far its colour has travelled from magenta
+toward ember; `battleScene.setMood` applies it, fed from `refresh()` in
+`main.ts` — the same choke point the HUD and the debug channel come from, so
+the deck, the chain counter and the cards cannot describe different moments.
+`CHAIN_FULL_BRIGHT` is 5 because that is what the game can actually reach: the
+chain breaks the moment the party takes damage and the party is four.
+
+A travelling shockwave ring on each hit was planned and **dropped**. The rim
+and deck response already carry "the arena reacts", and they are pure
+functions of state, which means every channel can see them. A ring is
+time-driven, and step mode renders at a frozen time — so the one channel that
+judges this work could not have judged it.
+
 Not done, and the obvious next steps:
 
 - **Circuit-trace clouds.** The site header has them; the scene does not. The
-  most art-directed element left and the hardest to do procedurally.
+  most art-directed element left and the hardest to do procedurally. The deck
+  markings are the same motif, so `routeDeck` in `scene/arena.ts` is the
+  vocabulary to extend rather than a second one to invent.
 - **The round/chain/phase strip.** The last unstyled region. `--font-display`
   and `--font-label` exist now, so it has faces to be styled with.
 - **Per-enemy-turn granularity.** `advance` resolves every enemy turn in one

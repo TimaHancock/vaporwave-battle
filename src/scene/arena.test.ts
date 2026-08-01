@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  arenaEmission,
+  CHAIN_FULL_BRIGHT,
   COLONNADE_PER_SIDE,
   COLONNADE_RADIUS,
   COLUMN_CAST_CLEARANCE,
@@ -276,6 +278,64 @@ describe('routeDeck', () => {
     expect(() => routeDeck(createRng(1), { ...DEFAULT_DECK, step: 0 })).toThrow(
       /must be positive/,
     );
+  });
+});
+
+describe('arenaEmission', () => {
+  it('rests at a chain of 0 or 1', () => {
+    /* A chain of 1 is just a hit -- the same threshold the float layer's
+       counter uses. An arena that flared on every single blow would be
+       flaring permanently. */
+    expect(arenaEmission({ chain: 0, bossHpFraction: 1 }).rim).toBe(
+      arenaEmission({ chain: 1, bossHpFraction: 1 }).rim,
+    );
+  });
+
+  it('brightens with the chain, and stops', () => {
+    let previous = 0;
+    for (let chain = 1; chain <= CHAIN_FULL_BRIGHT; chain++) {
+      const { rim } = arenaEmission({ chain, bossHpFraction: 1 });
+      expect(rim, `chain ${chain}`).toBeGreaterThanOrEqual(previous);
+      previous = rim;
+    }
+    /* Past the top it holds rather than running away. A 40-hit chain must not
+       leave the arena forty times brighter than the sun. */
+    expect(arenaEmission({ chain: 400, bossHpFraction: 1 }).rim).toBe(
+      arenaEmission({ chain: CHAIN_FULL_BRIGHT, bossHpFraction: 1 }).rim,
+    );
+  });
+
+  it('heats up as the boss loses HP', () => {
+    expect(arenaEmission({ chain: 0, bossHpFraction: 1 }).heat).toBe(0);
+    expect(arenaEmission({ chain: 0, bossHpFraction: 0 }).heat).toBe(1);
+    expect(arenaEmission({ chain: 0, bossHpFraction: 0.5 }).heat).toBeCloseTo(0.5, 10);
+  });
+
+  it('clamps rather than trusting its caller', () => {
+    /* These come from live battle state through the renderer. A negative
+       chain or an HP fraction above 1 is a bug somewhere else, and the arena
+       going black or blinding is not a useful way to report it. */
+    for (const mood of [
+      { chain: -5, bossHpFraction: 2 },
+      { chain: Number.NaN, bossHpFraction: Number.NaN },
+      { chain: 3, bossHpFraction: -1 },
+    ]) {
+      const emission = arenaEmission(mood);
+      expect(Number.isFinite(emission.rim), JSON.stringify(mood)).toBe(true);
+      expect(Number.isFinite(emission.deck)).toBe(true);
+      expect(emission.heat).toBeGreaterThanOrEqual(0);
+      expect(emission.heat).toBeLessThanOrEqual(1);
+      expect(emission.rim).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('moves the deck and the rim together', () => {
+    /* Two regions, one signal. If they ever diverged the arena would be
+       saying two things about the same chain. */
+    const rest = arenaEmission({ chain: 1, bossHpFraction: 1 });
+    const peak = arenaEmission({ chain: CHAIN_FULL_BRIGHT, bossHpFraction: 1 });
+    expect(peak.rim).toBeGreaterThan(rest.rim);
+    expect(peak.deck).toBeGreaterThan(rest.deck);
   });
 });
 

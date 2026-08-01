@@ -48,6 +48,7 @@ import { createBattleScene, CAMERA } from './scene/battleScene';
 import { createPostProcessing } from './scene/post';
 import { loadCharacterTexture } from './scene/sprite';
 import { layoutBoss, layoutParty } from './scene/spriteLayout';
+import type { ArenaMood } from './scene/arena';
 import { BOSS, CAST, PARTY } from './scene/cast';
 import { renderHud, toHudModel } from './ui/hud';
 import {
@@ -57,6 +58,7 @@ import {
 } from './ui/floatLayer';
 import { back, confirm, moveCursor, INITIAL_MENU, type MenuState } from './ui/menu';
 import { createBattle } from './battle/battle';
+import type { BattleState } from './battle/types';
 import { createRoster } from './battle/roster';
 import { createSequencer, type SequencerView } from './battle/sequencer';
 import { previewUpcoming } from './battle/turnOrder';
@@ -275,6 +277,9 @@ async function main(
     }
   }
 
+  /** The last mood applied, so `refresh` can tell when there is nothing to do. */
+  let lastMood: ArenaMood = { chain: -1, bossHpFraction: -1 };
+
   /* One place the interface is rebuilt from state, called by the sequencer
      on every beat and by the keyboard handler on every keypress. Both the
      DOM and the debug channel are pure functions of the same view, so they
@@ -287,7 +292,62 @@ async function main(
     renderHud(hudRoot, toHudModel(view.state, menu, view));
     emitFloats(view);
     floats.setChain(view.state.chain, anchorFor(BOSS.name));
+    /* The arena's neon, from the same view as everything else -- so the deck
+       under the player's feet, the chain counter over the boss and the cards
+       along the bottom can never be describing different moments. State in,
+       nothing back: the renderer reads BattleState and never writes to it. */
+    const mood = arenaMoodOf(view.state);
+    /*
+     * ONLY ON A CHANGE, and the guard is load-bearing rather than tidy.
+     *
+     * `refresh()` runs on every keypress, and most keypresses move a menu
+     * cursor -- which the arena has no opinion about. Redrawing on all of
+     * them put a full software render behind every arrow key in the e2e
+     * suite and took it from 1.3 to 5.4 minutes with seven timeouts. That is
+     * the same trap `?time=0` exists to avoid: headless Chromium has no GPU
+     * and rasterises this scene in hundreds of milliseconds.
+     */
+    if (mood.chain !== lastMood.chain || mood.bossHpFraction !== lastMood.bossHpFraction) {
+      lastMood = mood;
+      battle.setMood(mood);
+
+      /*
+       * In step mode, redraw -- at the SAME simulated time.
+       *
+       * `?time=` renders one frame and halts the loop, which was fine while
+       * the only thing that changed after boot was the DOM. It is not fine
+       * now that the arena's neon is a function of battle state: the
+       * materials would update and nothing would ever put them on screen, so
+       * every screenshot showed the arena at its opening value however the
+       * fight had gone. The same shape as publishing debug state off the
+       * loop, and for the same reason.
+       *
+       * At `currentTime` rather than a fresh clock read, so ambient animation
+       * does not advance and a stepped frame stays reproducible.
+       */
+      if (isStepMode && isReady) drawFrame(currentTime);
+    }
+
     publish();
+  }
+
+
+  /**
+   * The two numbers the arena reacts to.
+   *
+   * Kept to a function rather than inlined so the read stays in one place and
+   * a missing boss -- which happens the instant the fight is won -- resolves
+   * to a resting arena instead of a NaN that turns the whole stage black.
+   */
+  function arenaMoodOf(state: BattleState): ArenaMood {
+    const boss = state.actors.find((actor) => actor.id === BOSS.name);
+    return {
+      chain: state.chain,
+      bossHpFraction:
+        boss === undefined || boss.stats.maxHp <= 0
+          ? 1
+          : boss.hp / boss.stats.maxHp,
+    };
   }
 
   /* --- Input ------------------------------------------------------ */
