@@ -19,7 +19,6 @@ import {
   buildBank,
   frameHalfWidth,
   terrainIndices,
-  wireframeIndices,
   type BankOptions,
 } from './mountains';
 /* Type-only, so it erases at build time -- the scene shares battle
@@ -343,8 +342,8 @@ export function createBattleScene(rng: Rng): BattleScene {
     /* Same seed draws both, so the two banks are mirror images. That is
        deliberate: an asymmetric valley reads as one bank being wrong rather
        than as variety, at a locked camera that always frames both. */
-    { side: -1, columns: 40, rows: 56, roughness: 0.75, octaveCells: 7 },
-    { side: 1, columns: 40, rows: 56, roughness: 0.75, octaveCells: 7 },
+    { side: -1, columns: 40, rows: 56, roughness: 0.8, octaveCells: 7 },
+    { side: 1, columns: 40, rows: 56, roughness: 0.8, octaveCells: 7 },
   ];
 
   const terrainMaterial = registry.track(
@@ -357,25 +356,21 @@ export function createBattleScene(rng: Rng): BattleScene {
     new THREE.MeshBasicMaterial({ vertexColors: true }),
   );
 
-  const latticeMaterial = registry.track(
-    /* Cyan, and this is the one place the palette rule allows it: "a thin
-       line accent, never a fill". A lattice is thin lines, and it is the SAME
-       material language as the grid ocean -- neon lines over dark mass -- so
-       the land and the water read as one world rather than two treatments.
-       If it ever over-weights the composition, PALETTE.horizon is the
-       fallback, not a wider cyan.
-
-       Fog ON. Without it a lattice at z = -85 blazes at full strength while
-       the mass under it has already dissolved to void. */
-    new THREE.LineBasicMaterial({
-      color: PALETTE.signal,
-      transparent: true,
-      /* Low. The lattice is a HIGHLIGHT on rock, not the drawing of it -- at
-         0.28 the near banks read as a net thrown over the corners of the
-         frame and competed with the grid ocean for the same job. */
-      opacity: 0.16,
-    }),
-  );
+  /*
+   * NO NEON LATTICE OVER THE ROCK, currently.
+   *
+   * There was one -- a LineSegments in PALETTE.signal built from
+   * `wireframeIndices`, which is still in mountains.ts and still tested. The
+   * argument for it was material continuity with the grid ocean: neon lines
+   * over dark mass, one language for land and water. The argument against is
+   * what the shots showed, which is that the water already carries that
+   * language and a second net competing for it made the near banks read as
+   * mesh rather than rock. The body's baked shading is doing the form on its
+   * own.
+   *
+   * Restoring it is a LineSegments sharing the body's position attribute with
+   * `wireframeIndices(columns, rows, 4)` as its index.
+   */
 
   /* The value ramp the baked shade indexes into. Both ends are existing
      palette entries in the same hue family: shadowed ground sits at plum,
@@ -412,14 +407,6 @@ export function createBattleScene(rng: Rng): BattleScene {
        entirely -- see terrainIndices. */
     bodyGeometry.setIndex(terrainIndices(bank.columns, bank.rows, options.side));
     scene.add(new THREE.Mesh(bodyGeometry, terrainMaterial));
-
-    /* The lattice shares the body's position buffer -- one upload, and the
-       lines cannot drift off the surface they are drawn on. Every 4th row and
-       column: at step 1 it is a mesh on screen rather than a grid over rock. */
-    const latticeGeometry = registry.track(new THREE.BufferGeometry());
-    latticeGeometry.setAttribute('position', positionAttribute);
-    latticeGeometry.setIndex(wireframeIndices(bank.columns, bank.rows, 4));
-    scene.add(new THREE.LineSegments(latticeGeometry, latticeMaterial));
   }
 
   /* --- Stars ------------------------------------------------------- */

@@ -117,7 +117,10 @@ describe('corridorHalfWidth', () => {
     const shares = depths(12).map((z) => corridorHalfWidth(z) / frameHalfWidth(z));
 
     for (let i = 1; i < shares.length; i++) {
-      expect(shares[i]!, `step ${i}`).toBeLessThanOrEqual(shares[i - 1]!);
+      /* Epsilon because the tail is a plateau at exactly SUN_WINDOW_FRACTION,
+         and two floating-point routes to the same number need not agree on
+         the last bit. */
+      expect(shares[i]!, `step ${i}`).toBeLessThanOrEqual(shares[i - 1]! + 1e-12);
     }
     expect(shares[0]!).toBeGreaterThan(0.9);
     /* And it bottoms out at exactly the sun's window rather than continuing
@@ -193,6 +196,26 @@ describe('buildBank', () => {
         ...buildBank(createRng(seed), BANK).vertices.map((v) => v.y),
       );
       expect(lowest, `seed ${seed}`).toBeGreaterThanOrEqual(HORIZON_Y);
+    }
+  });
+
+  it('always points OUTWARD, at every row', () => {
+    /* The root cause of a whole family of failures, worth naming directly.
+       The outer edge is normally a multiple of the frame half-width, and in
+       front of the arena the frame is narrower than the corridor -- so that
+       multiple lands inside the channel and the bank is built inside out.
+       Everything downstream goes with it: the corridor stops being clear and
+       the triangles wind backwards and are culled. Read as a winding bug when
+       it is a bounds bug. */
+    for (const side of [-1, 1] as const) {
+      const bank = buildBank(createRng(1337), { ...BANK, side });
+      for (let row = 0; row < bank.rows; row++) {
+        const shore = bank.vertices[row * bank.columns]!;
+        const edge = bank.vertices[row * bank.columns + bank.columns - 1]!;
+        expect(Math.abs(edge.x), `side ${side} row ${row}`).toBeGreaterThan(
+          Math.abs(shore.x),
+        );
+      }
     }
   });
 

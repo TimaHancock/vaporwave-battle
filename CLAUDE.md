@@ -232,17 +232,32 @@ on a legitimately unlocked battle.
   left — so the lattice floated with no mass under it. Same hue family, same
   warm bias; only the value moved, and it has to carry further than it looks
   because fog has taken half of it back by mid-frame.
-- **The lattice is the one legitimate cyan fill-adjacent use.** The rule is "a
-  thin line accent, never a fill", and a lattice is thin lines. It is also the
-  same material language as the grid ocean — neon lines over dark mass — which
-  is what makes land and water read as one world. Keep its opacity low: it is
-  a highlight ON rock, and at 0.28 it read as a net thrown over the corners of
-  the frame. If it ever over-weights the composition the fallback is `horizon`
-  magenta, not broader cyan.
-- **The lattice shares the body's position attribute** — one upload, and the
-  lines cannot drift off the surface they edge. Build it from
-  `wireframeIndices`, not `WireframeGeometry`: that draws every triangle
-  diagonal, which triples the line count and puts the triangulation on screen.
+- **There is NO neon lattice over the rock, and that was tried.** A
+  `LineSegments` in `signal` built from `wireframeIndices` — which is still in
+  `mountains.ts` and still tested. The argument for it was material continuity
+  with the grid ocean; the argument against is what the shots showed, which is
+  that the water already carries that language and a second net competing for
+  it made the near banks read as mesh rather than rock. The baked shading
+  does the form on its own. If it comes back: share the body's position
+  attribute so the lines cannot drift off the surface, keep the opacity near
+  0.16, and build it from `wireframeIndices`, never `WireframeGeometry` —
+  that draws every triangle diagonal, tripling the line count and putting the
+  triangulation on screen.
+- **Both ends of the terrain are placed so the EDGE is not visible, by
+  opposite means.** `TERRAIN_FAR_Z` sits at `fog.far`, so the last row has
+  already dissolved to void. `TERRAIN_NEAR_Z` is in FRONT of the arena at
+  z +4, where the frame is ~±3.6 and the corridor is 7.2 — the near rows are
+  outside the view entirely and the bank appears to run off the bottom of the
+  frame. Starting it at the first depth that shows any frame is the obvious
+  choice and the wrong one: the row where land begins is then a straight
+  diagonal out of the corner, and it reads as exactly what it is.
+- **A bank must point OUTWARD at every row, and near the camera that is not
+  automatic.** The outer edge is a multiple of the frame half-width, which
+  shrinks toward the camera — and in front of the arena the frame is narrower
+  than the corridor, so that multiple lands *inside* the channel and the bank
+  is built inside out. Everything downstream follows: the corridor stops being
+  clear and the triangles wind backwards and are culled. `MIN_BANK_WIDTH`
+  floors it. Reads as a winding bug; is a bounds bug.
 - **Stars are sized in pixels** (`sizeAttenuation: false`) and scattered
   across `frameHalfWidth(z)`, not an arbitrary span. With attenuation on, a
   star 130 units out projects to a fraction of a pixel and is simply not
@@ -472,9 +487,10 @@ to, plus the chain counter over the boss. What it rests on:
   in one turn.
 
 **The scene is a valley now.** Two banks of 3D terrain flank a corridor of
-water, starting beside the arena at z −4 and running back to z −85 where the
-fog has taken them; a stronger grid ocean runs down the floor and a starfield
-sits above. The maths lives in `scene/mountains.ts` — pure, no three.js,
+water, starting in front of the arena at z +4 and running back to z −85 where
+the fog has taken them; a stronger grid ocean runs down the floor and a
+starfield sits above. Solid rock, shaded by baked vertex colour, with no line
+work on it. The maths lives in `scene/mountains.ts` — pure, no three.js,
 Vitest-covered, the same split `spriteLayout.ts` follows; `battleScene.ts`
 only builds buffers from what it returns.
 

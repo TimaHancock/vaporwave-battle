@@ -144,15 +144,21 @@ export function corridorHalfWidth(z: number, aspect = CANONICAL_ASPECT): number 
  * How far the near and far ends of the terrain sit, and therefore what
  * "normalised depth" means to everything below.
  *
- * NEAR is where the banks first have any frame to appear in -- at z = 0 the
- * frame is only about +/-5.6 wide and the platform alone is 6.4, so terrain
- * any nearer than this is outside the view no matter how tall it is.
+ * BOTH ENDS ARE PLACED SO THE EDGE IS NOT VISIBLE, by opposite means.
  *
- * FAR is inside fog.far (96 from the camera, so world z = -85). The terrain
- * has to END somewhere, and it should end where fog has already taken it to
- * the void colour -- otherwise the last row is a visible edge.
+ * NEAR is in FRONT of the arena, past the camera's own depth for practical
+ * purposes: the frame is only about +/-3.6 wide out here and the corridor is
+ * 7.2, so the near rows are outside the view entirely and the bank appears to
+ * carry on past the bottom of the frame. Starting it at the first depth that
+ * shows any frame at all is the obvious thing and the wrong one -- the row
+ * where the land begins is then a straight line running diagonally out of the
+ * corner, and it reads exactly like what it is, an object that stops.
+ *
+ * FAR is at fog.far (96 from the camera, so world z = -85), where the fog has
+ * already taken the terrain to the void colour, so the last row dissolves
+ * rather than ending.
  */
-export const TERRAIN_NEAR_Z = -4;
+export const TERRAIN_NEAR_Z = 4;
 export const TERRAIN_FAR_Z = -85;
 
 /**
@@ -165,8 +171,8 @@ export const TERRAIN_FAR_Z = -85;
  * ridges rise above nearer ones on screen, which is what stacks them into
  * layers and gives the eye something to read the recession from.
  */
-export const PEAK_FRACTION_NEAR = 0.45;
-export const PEAK_FRACTION_FAR = 0.62;
+export const PEAK_FRACTION_NEAR = 0.42;
+export const PEAK_FRACTION_FAR = 0.58;
 
 /**
  * How far toward the frame edge the height ramp reaches full height.
@@ -190,6 +196,21 @@ const RAMP_FRACTION = 0.8;
  * frame, but a spike is a spike.
  */
 const MIN_RAMP_REACH = 3;
+
+/**
+ * Narrowest a bank may be, corridor edge to outer edge, in world units.
+ *
+ * The outer edge is normally a multiple of the frame half-width, which
+ * shrinks as the terrain approaches the camera -- and in front of the arena
+ * the frame is NARROWER THAN THE CORRIDOR, so that multiple lands inside the
+ * channel and the bank is built inside out. Every downstream property goes
+ * with it: the corridor stops being clear, and the triangles wind backwards
+ * and vanish. The floor keeps the bank pointing outward at every depth.
+ *
+ * 6 is where the two rules meet at about z = -9, so the outer edge is
+ * continuous rather than stepping as one takes over from the other.
+ */
+const MIN_BANK_WIDTH = 6;
 
 /**
  * Envelope height at the frame edge for a given depth, in world units.
@@ -357,8 +378,9 @@ export function buildBank(rng: Rng, options: BankOptions): Bank {
     /* Past the frame edge on purpose. A bank that stops exactly at the edge
        shows its outer end as a vertical cut the moment the window is anything
        but 16:9, and the composition is authored for 16:9 but must not fall
-       apart off it. */
-    const outer = frameEdge * 1.3;
+       apart off it. Floored so the bank cannot invert in front of the arena
+       -- see MIN_BANK_WIDTH. */
+    const outer = Math.max(frameEdge * 1.3, inner + MIN_BANK_WIDTH);
     const peak = peakHeightAt(z, aspect);
     /* Measured to the FRAME EDGE, not to `outer` -- see RAMP_FRACTION. */
     const reach = Math.max((frameEdge - inner) * RAMP_FRACTION, MIN_RAMP_REACH);

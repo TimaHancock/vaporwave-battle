@@ -109,10 +109,12 @@ export const SHOTS = [
       'the grid ocean on its floor. The questions no assertion can answer -- ' +
       'does the land read as ONE surface running away from the viewer, or as ' +
       'terraced steps? Is the corridor\'s convergence doing the depth work, ' +
-      'or is fog carrying it alone? Does the neon lattice read as light on ' +
-      'rock, or as a mesh someone forgot to hide? Are the near banks too ' +
-      'bright now they sit inside the fog\'s near plane? And is the sun ' +
-      'still seen THROUGH a window rather than over a wall?',
+      'or is fog carrying it alone? Does the rock hold its form with no line ' +
+      'work on it, or does the baked shading flatten out? Do the banks run ' +
+      'off the bottom of the frame, or can you find the row where the land ' +
+      'begins? Are the near banks too bright now they sit inside the fog\'s ' +
+      'near plane? And is the sun still seen THROUGH a window rather than ' +
+      'over a wall?',
     seed: 1337,
     time: 2.0,
     /* No keys and no HUD subject -- this is a scene shot, so the frame is
