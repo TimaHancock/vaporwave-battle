@@ -169,35 +169,80 @@ on a legitimately unlocked battle.
 - **Grounding:** every sprite gets a contact shadow, or flat art reads as
   pasted onto the scene. Shadows use `depthWrite: false` and a lower
   `renderOrder` than sprites.
-- **The sun's window is an ANGLE, not a distance.** `SUN_WINDOW_FRACTION` in
-  `scene/mountains.ts` is the share of the frame's half-width the mountain
-  crests may not close over, and `sunWindowHalfWidth(z)` converts it per
-  range. Ranges sit at different depths, so a gap fixed in world units would
-  gape on the near range and shut over the sun on the far one. The value is
-  measured against the disc, which spans ~0.22 of the half-width: at 0.34 the
-  ridges cleared the sun entirely and read as unrelated shapes in the
-  corners. `ridgeProfile` PINS the window flat rather than merely lowering
-  it, so no seed can put a peak in front of the sun — the same move
-  `fitSpacingToPlatform` makes, and a Vitest case walks 250 seeds to say so.
-- **Ridge depth and fog are one decision.** The ranges have no per-range
-  colour: their entire treatment is where they land in the fog gradient. Move
+- **The corridor is one expression doing three jobs.**
+  `corridorHalfWidth(z) = max(sunWindowHalfWidth(z), ARENA_CLEARANCE)` in
+  `scene/mountains.ts` is the channel the banks may not enter. **Near, the
+  arena binds** — no seed can put rock behind a party member's shoulder.
+  **Far, the sun binds** — the window overtakes the clearance around z −60.
+  **In between the banks converge**, because a corridor constant in world
+  units closes from 94% of the half-frame to 20%, and that convergence is
+  the depth cue the old flat cutouts could not produce. Written as one `max`
+  so it cannot be half-changed; a Vitest case walks 250 seeds to say the
+  channel stays clear.
+- **The sun's window is an ANGLE, not a distance.** `SUN_WINDOW_FRACTION` is
+  the share of the frame's half-width the terrain may not close over, and
+  `sunWindowHalfWidth(z)` converts it per depth. The terrain spans −4 to −85,
+  so a gap fixed in world units would gape at the near end and shut over the
+  sun at the far one. The value is measured against the disc, which spans
+  ~0.22 of the half-width: at 0.34 the ridges cleared the sun entirely and
+  read as unrelated shapes in the corners.
+- **Terrain shading is BAKED VERTEX COLOUR, never a scene light.**
+  `mountains.ts` hands back a 0..1 `shade` per vertex; `battleScene.ts` lerps
+  `plum` → `ridge` across it. Lighting the backdrop with the rig would mean
+  every future light change had to be judged against mountains as well as
+  faces, and the rig is a contract with the *character art*.
+- **The shading sun is LIFTED, and that is deliberate.** The real disc sits
+  ~5° above a horizon 100 units out, which is grazing incidence on a
+  heightfield: the dot against a near-vertical normal is ≈0 everywhere, the
+  middle half of the field spanned 0.08 of the ramp, and the terrain came out
+  as one flat value. `SUN_SHADING_POSITION` keeps the sun's **azimuth** — so
+  "toward the light" is still "toward the corridor" on both banks without
+  either knowing which side it is — and raises only its height. `SHADE_GAIN`
+  then spends the ramp on the range gentle slopes actually produce.
+- **Winding is side-dependent, and getting it wrong is SILENT.** A bank's
+  columns run outward, so x increases along a row on the right bank and
+  decreases on the left; one index order gives upward faces on one and
+  downward on the other, and downward is backface-culled by a camera looking
+  down at it. The triangles still submit and still count in `renderer.info`,
+  so the shot looks like a shading bug — a wireframe hanging in the air with
+  no rock under it. `terrainIndices` takes the side; a Vitest case asserts
+  every triangle's normal points up on both banks.
+- **The height envelope must top out INSIDE the frame.** A bank runs to 1.3×
+  the frame half-width so it has no visible end, and ramping across that whole
+  span put the tallest land 30% off screen — the valley read as two smooth
+  berms with the peaks cropped off. `RAMP_FRACTION` reaches full height at 80%
+  of the way to the frame edge and holds it from there.
+- **Relief MULTIPLIES the envelope and is ridged, not additive and smooth.**
+  Multiplying means the envelope decides how tall a place may be and the noise
+  only decides where within that it lands, so no draw can spike a peak at the
+  waterline or dig through the shore. Folding the value noise (`ridged()`)
+  puts a crease at every midpoint crossing; plain value noise gives rolling
+  dunes, and the crest is the whole silhouette against the brightest thing in
+  frame.
+- **Terrain depth and fog are one decision, more than before.** The banks run
+  from inside `fog.near` out to `fog.far`, so fog is their entire near-to-far
+  value range rather than the separation between three chosen depths. Move
   `scene.fog` and you have re-tuned the mountains whether you meant to or
   not. **And watch the sun** — it sets cleanly only because the water
   overtakes the disc above where the grid fades out, and fog moves the second
   of those. That is a screenshot check, not an assertion.
-- **`PALETTE.ridge` is a value, not a new hue.** Silhouettes painted in
-  `plum` were invisible: plum sits a few points off `void`, and fog took what
-  little was left, so the crest lines floated with no mass under them. Same
-  hue family, same warm bias — only the value moved.
-- **The crest line is the one legitimate cyan fill-adjacent use.** The rule is
-  "a thin line accent, never a fill", and a crest is literally a thin line. It
-  is also what keeps a silhouette from vanishing against a near-black sky. If
-  it ever over-weights the frame the fallback is `horizon` magenta, not
-  broader cyan.
-- **Crests are drawn per RUN, not per profile.** A ridge is pinned flat across
-  the window, so one `Line` over the whole profile dives to the hem, crosses
-  the middle of the frame and climbs back — a bright cyan diagonal through
-  the sun. `crestRuns()` returns only the stretches above the horizon.
+- **`PALETTE.ridge` is a value, not a new hue.** It is the LIT end of the
+  terrain ramp; `plum` is the shadowed end. Rock shaded within plum alone was
+  invisible — plum sits a few points off `void` and fog took what little was
+  left — so the lattice floated with no mass under it. Same hue family, same
+  warm bias; only the value moved, and it has to carry further than it looks
+  because fog has taken half of it back by mid-frame.
+- **The lattice is the one legitimate cyan fill-adjacent use.** The rule is "a
+  thin line accent, never a fill", and a lattice is thin lines. It is also the
+  same material language as the grid ocean — neon lines over dark mass — which
+  is what makes land and water read as one world. Keep its opacity low: it is
+  a highlight ON rock, and at 0.28 it read as a net thrown over the corners of
+  the frame. If it ever over-weights the composition the fallback is `horizon`
+  magenta, not broader cyan.
+- **The lattice shares the body's position attribute** — one upload, and the
+  lines cannot drift off the surface they edge. Build it from
+  `wireframeIndices`, not `WireframeGeometry`: that draws every triangle
+  diagonal, which triples the line count and puts the triangulation on screen.
 - **Stars are sized in pixels** (`sizeAttenuation: false`) and scattered
   across `frameHalfWidth(z)`, not an arbitrary span. With attenuation on, a
   star 130 units out projects to a fraction of a pixel and is simply not
@@ -426,13 +471,21 @@ to, plus the chain counter over the boss. What it rests on:
   a commit: two turns in quick succession collide exactly as much as two hits
   in one turn.
 
-**The scene is a valley now.** Three flat silhouette ranges at z -22/-34/-48
-flank the sun, with a stronger grid ocean below and a starfield above. The
-ridge maths lives in `scene/mountains.ts` — pure, no three.js, Vitest-covered,
-the same split `spriteLayout.ts` follows; `battleScene.ts` only builds meshes
-from what it returns. The mountains are FLAT CUTOUTS on purpose: the camera is
-locked and never moves to reveal they are flat, so modelled terrain would buy
-a normal budget and a lighting decision for an identical silhouette.
+**The scene is a valley now.** Two banks of 3D terrain flank a corridor of
+water, starting beside the arena at z −4 and running back to z −85 where the
+fog has taken them; a stronger grid ocean runs down the floor and a starfield
+sits above. The maths lives in `scene/mountains.ts` — pure, no three.js,
+Vitest-covered, the same split `spriteLayout.ts` follows; `battleScene.ts`
+only builds buffers from what it returns.
+
+It was flat cutouts first — three silhouette curtains at fixed depths — on the
+argument that a locked camera never moves to reveal they are flat. True, and
+beside the point: flat was not a problem because it could be seen through, it
+was a problem because three parallel cutouts read as painted flats in a
+theatre. Land that runs continuously away from the viewer is a different
+image, and no number of layers gets you there. What survived the rewrite is
+the constraint — the sun's window — generalised from three chosen depths to
+every row.
 
 Not done, and the obvious next steps:
 

@@ -12,15 +12,15 @@
  */
 
 import * as THREE from 'three';
-import type { Rng } from '../rng';
+import { createRng, type Rng } from '../rng';
 import { createCharacterSprite, type CharacterSprite } from './sprite';
 import { assignRenderOrders, type Vec3 } from './spriteLayout';
 import {
-  crestRuns,
+  buildBank,
   frameHalfWidth,
-  HORIZON_Y,
-  ridgeProfile,
-  type RidgeOptions,
+  terrainIndices,
+  wireframeIndices,
+  type BankOptions,
 } from './mountains';
 /* Type-only, so it erases at build time -- the scene shares battle
    vocabulary without taking a dependency on battle logic. */
@@ -68,15 +68,20 @@ export const PALETTE = {
   /** Mid plum, the dominant field colour. */
   plum: 0x29081e,
   /**
-   * Mountain silhouettes. A lighter VALUE of the plum hue, not a new colour.
+   * Lit mountain rock. A lighter VALUE of the plum hue, not a new colour.
    *
-   * Plum itself is only a few points off the void, so a ridge painted in it
-   * and then fogged toward the void was invisible -- the crest lines floated
-   * with no mass under them. The site's mountains are a clearly readable dark
-   * maroon against a near-black sky, and this is that. Same hue family, same
-   * warm bias (R > B); only the value moved.
+   * The BRIGHT end of the terrain's ramp; `plum` is the shadowed end. Plum
+   * itself is only a few points off the void, so terrain shaded within that
+   * range came out as a black sheet with a wireframe on it -- the mass was
+   * simply not there. The site's mountains are a clearly readable dark maroon
+   * against a near-black sky, and this is that. Same hue family, same warm
+   * bias (R > B); only the value moved.
+   *
+   * It has to carry further than it looks, because the terrain spans the
+   * whole fog gradient: by the middle of the visible band fog has already
+   * taken half of it back toward the void.
    */
-  ridge: 0x4a1533,
+  ridge: 0x7a2450,
   /** Hot magenta -- the brand's primary accent. */
   horizon: 0xc61e82,
   /** Secondary pink, for bands and softer accents. */
@@ -311,108 +316,110 @@ export function createBattleScene(rng: Rng): BattleScene {
   sun.position.set(0, 5.31, -100);
   scene.add(sun);
 
-  /* --- Mountain ranges -------------------------------------------- */
+  /* --- Mountain valley -------------------------------------------- */
   /*
-   * The valley. Three flat silhouette cutouts at increasing depth, flanking
-   * left and right with the sun showing through the gap between them.
+   * Two banks of terrain flanking a corridor of water, beginning just past
+   * the arena and running back until the fog takes them.
    *
-   * FLAT CUTOUTS, NOT TERRAIN. The site's mountains are flat shapes and so
-   * are these -- a heightfield modelled in 3D would cost geometry, lighting
-   * decisions and a normal budget to look exactly the same through a locked
-   * camera that never moves to reveal it was flat. Depth comes from stacking
-   * several at different z, which is also what turns a backdrop into a
-   * valley.
+   * REAL HEIGHTFIELD, NOT CUTOUTS. This was three flat silhouette curtains at
+   * fixed depths, on the argument that a locked camera never moves to reveal
+   * they are flat. True and beside the point: flat was not a problem because
+   * it could be seen through, it was a problem because three parallel cutouts
+   * read as painted flats in a theatre. Land that runs continuously away from
+   * the viewer is a different image, and no number of layers gets you there.
    *
-   * The ranges are placed inside the fog, and that is the whole colour
-   * treatment: at 18/70 these depths land roughly a third, a half and three
-   * quarters of the way to the void colour, so they recede without a single
-   * per-range material tweak. Move the fog and you re-tune these -- it is
-   * one decision, not two.
+   * The corridor is the composition. mountains.ts owns it, and owns the one
+   * constraint that matters: no vertex may enter the channel at its own
+   * depth, at any seed -- the arena binds it near, the sun's window binds it
+   * far, and in between it converges hard in frame, which is the depth cue
+   * the cutouts could not produce.
    *
-   * Ridge shapes come from mountains.ts, which owns the constraint that
-   * matters: no crest may close over the sun's window, at any seed.
+   * Fog is doing MORE work than before, not less. The terrain now spans from
+   * inside fog.near out to fog.far, so fog is the entire near-to-far value
+   * range rather than the separation between three chosen depths. Move it and
+   * you have re-tuned the mountains whether you meant to or not.
    */
-  /* Peak heights climb with depth so the ranges stack in frame rather than
-     hiding behind each other: a far range at the near one's height is simply
-     shorter on screen and disappears. The shoulder stays low on all three so
-     each rises GENTLY out of the window -- a high shoulder turns the ridge
-     into a wall with a slot cut in it. */
-  const RANGES: readonly RidgeOptions[] = [
-    { z: -22, samples: 72, peakHeight: 7, shoulderFraction: 0.12, jitter: 0.4, baseY: HORIZON_Y - 14 },
-    { z: -34, samples: 64, peakHeight: 12, shoulderFraction: 0.14, jitter: 0.36, baseY: HORIZON_Y - 14 },
-    { z: -48, samples: 56, peakHeight: 18, shoulderFraction: 0.16, jitter: 0.32, baseY: HORIZON_Y - 14 },
+  const BANKS: readonly BankOptions[] = [
+    /* Same seed draws both, so the two banks are mirror images. That is
+       deliberate: an asymmetric valley reads as one bank being wrong rather
+       than as variety, at a locked camera that always frames both. */
+    { side: -1, columns: 40, rows: 56, roughness: 0.75, octaveCells: 7 },
+    { side: 1, columns: 40, rows: 56, roughness: 0.75, octaveCells: 7 },
   ];
 
-  const ridgeMaterial = registry.track(
-    /* Unlit on purpose. These are silhouettes, and the light rig is a
-       contract with the CHARACTER ART -- pulling the backdrop into it would
-       mean every future light change had to be judged against mountains as
-       well as faces. PALETTE.ridge rather than plum because plum sits only a
-       few points off the void and fog then took what little was left; see
-       the palette entry. Fog still separates the three ranges from each
-       other, which is the job it is actually good at. */
-    new THREE.MeshBasicMaterial({ color: PALETTE.ridge }),
+  const terrainMaterial = registry.track(
+    /* Unlit, and vertex-coloured. The shading is BAKED by mountains.ts from
+       the sun's position -- the only light source actually in frame -- rather
+       than lit by the scene rig. That rig is a contract with the CHARACTER
+       ART, where lighting is painted into the image; pulling the backdrop
+       into it would mean every future light change had to be judged against
+       mountains as well as faces. */
+    new THREE.MeshBasicMaterial({ vertexColors: true }),
   );
 
-  const crestMaterial = registry.track(
+  const latticeMaterial = registry.track(
     /* Cyan, and this is the one place the palette rule allows it: "a thin
-       line accent, never a fill". A crest is a thin line. It is also what
-       stops a silhouette being invisible against a near-black sky, and it
-       gives the frame the reference's blue-ridge / magenta-floor contrast.
+       line accent, never a fill". A lattice is thin lines, and it is the SAME
+       material language as the grid ocean -- neon lines over dark mass -- so
+       the land and the water read as one world rather than two treatments.
        If it ever over-weights the composition, PALETTE.horizon is the
-       fallback -- not a wider cyan. */
+       fallback, not a wider cyan.
+
+       Fog ON. Without it a lattice at z = -85 blazes at full strength while
+       the mass under it has already dissolved to void. */
     new THREE.LineBasicMaterial({
       color: PALETTE.signal,
       transparent: true,
-      opacity: 0.5,
+      /* Low. The lattice is a HIGHLIGHT on rock, not the drawing of it -- at
+         0.28 the near banks read as a net thrown over the corners of the
+         frame and competed with the grid ocean for the same job. */
+      opacity: 0.16,
     }),
   );
 
-  for (const range of RANGES) {
-    const profile = ridgeProfile(rng, range);
+  /* The value ramp the baked shade indexes into. Both ends are existing
+     palette entries in the same hue family: shadowed ground sits at plum,
+     lit rock at the lighter ridge value. A shade is a VALUE, not a colour --
+     mountains.ts hands back 0..1 and this is the only place that decides
+     what those two ends are. */
+  const terrainShadow = new THREE.Color(PALETTE.plum);
+  const terrainLit = new THREE.Color(PALETTE.ridge);
+  const terrainColor = new THREE.Color();
 
-    /* A curtain: two vertices per sample, crest and hem, walked as a strip
-       of quads. Cheaper than a triangulated mesh and produces exactly the
-       same silhouette, which is all a flat cutout has to produce. */
-    const positions = new Float32Array(profile.length * 2 * 3);
-    for (let i = 0; i < profile.length; i++) {
-      const sample = profile[i]!;
-      positions.set([sample.x, sample.y, range.z], i * 6);
-      positions.set([sample.x, range.baseY, range.z], i * 6 + 3);
+  for (const options of BANKS) {
+    /* A fresh generator per bank, from the same seed, rather than draws off
+       the shared stream. Two reasons: both banks then come out as mirror
+       images of each other, and changing the terrain's resolution cannot
+       reroll the battle sitting downstream of it. */
+    const bank = buildBank(createRng(rng.seed), options);
+
+    const positions = new Float32Array(bank.vertices.length * 3);
+    const colors = new Float32Array(bank.vertices.length * 3);
+    for (let i = 0; i < bank.vertices.length; i++) {
+      const vertex = bank.vertices[i]!;
+      positions.set([vertex.x, vertex.y, vertex.z], i * 3);
+      terrainColor.copy(terrainShadow).lerp(terrainLit, vertex.shade);
+      colors.set([terrainColor.r, terrainColor.g, terrainColor.b], i * 3);
     }
 
-    const indices: number[] = [];
-    for (let i = 0; i < profile.length - 1; i++) {
-      const crest = i * 2;
-      const hem = crest + 1;
-      indices.push(crest, hem, crest + 2, hem, hem + 2, crest + 2);
-    }
+    const positionAttribute = new THREE.BufferAttribute(positions, 3);
 
-    const ridgeGeometry = registry.track(new THREE.BufferGeometry());
-    ridgeGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    ridgeGeometry.setIndex(indices);
-    scene.add(new THREE.Mesh(ridgeGeometry, ridgeMaterial));
+    const bodyGeometry = registry.track(new THREE.BufferGeometry());
+    bodyGeometry.setAttribute('position', positionAttribute);
+    bodyGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    /* The side decides the winding. A bank's columns run outward, so the two
+       banks wind opposite ways and one index order would cull one of them
+       entirely -- see terrainIndices. */
+    bodyGeometry.setIndex(terrainIndices(bank.columns, bank.rows, options.side));
+    scene.add(new THREE.Mesh(bodyGeometry, terrainMaterial));
 
-    /* The crest, as its own line -- one per side, NOT one across the whole
-       profile. The profile is pinned to the hem across the sun's window, so
-       a single Line dives to the bottom of the curtain, runs straight across
-       the middle of the frame and climbs back: a bright cyan diagonal
-       through the sun. crestRuns gives back only the stretches that are
-       actually mountain. Drawn from the same samples as the body, so the
-       edge cannot drift off the silhouette it is edging. */
-    for (const run of crestRuns(profile)) {
-      const crestPositions = new Float32Array(run.length * 3);
-      for (let i = 0; i < run.length; i++) {
-        const sample = run[i]!;
-        crestPositions.set([sample.x, sample.y, range.z], i * 3);
-      }
-      const crestGeometry = registry.track(new THREE.BufferGeometry());
-      crestGeometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(crestPositions, 3),
-      );
-      scene.add(new THREE.Line(crestGeometry, crestMaterial));
-    }
+    /* The lattice shares the body's position buffer -- one upload, and the
+       lines cannot drift off the surface they are drawn on. Every 4th row and
+       column: at step 1 it is a mesh on screen rather than a grid over rock. */
+    const latticeGeometry = registry.track(new THREE.BufferGeometry());
+    latticeGeometry.setAttribute('position', positionAttribute);
+    latticeGeometry.setIndex(wireframeIndices(bank.columns, bank.rows, 4));
+    scene.add(new THREE.LineSegments(latticeGeometry, latticeMaterial));
   }
 
   /* --- Stars ------------------------------------------------------- */
