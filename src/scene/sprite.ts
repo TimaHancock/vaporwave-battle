@@ -29,6 +29,13 @@ import {
   SHADOW_RENDER_ORDER,
   type Vec3,
 } from './spriteLayout';
+import {
+  flashStrength,
+  recoilOffset,
+  RECOIL_BASE,
+  RECOIL_MAX,
+  RECOIL_SECONDS,
+} from './impact';
 /* Type-only: erases at build time, so the sprite layer shares battle
    vocabulary without importing any battle logic. */
 import type { Side } from '../battle/types';
@@ -146,6 +153,21 @@ export interface CharacterSprite {
    * full CSS animation, and still readable in the DOM by the test harness.
    */
   headScreenPosition(camera: THREE.Camera): { x: number; y: number };
+  /**
+   * Start a hit reaction: a flash, and a stagger away from the attacker.
+   *
+   * `at` is a scene-clock time in seconds, not a wall clock. Everything the
+   * reaction does is derived from age against that clock, which is what lets
+   * hit-stop work by simply holding it still.
+   */
+  react(kind: 'hit' | 'critical', direction: -1 | 1, at: number): void;
+  /**
+   * Advance whatever reaction is live. Cheap and safe to call every frame.
+   *
+   * `motion` false is reduced motion: the flash still fires, the stagger does
+   * not.
+   */
+  updateReaction(now: number, motion?: boolean): void;
   dispose(): void;
 }
 
@@ -221,6 +243,38 @@ export const HIGHLIGHT_CEILING = 0.416;
 export const HIGHLIGHT_KNEE = 0.25;
 
 /**
+ * Where the highlight ceiling is lifted to at the peak of an impact flash.
+ *
+ * JUST above `post.ts`'s bloom threshold of 0.68, and the "just" is the whole
+ * tuning. For the length of a flash the struck character IS allowed to bloom
+ * -- `HIGHLIGHT_CEILING` exists to stop authored rim lights smearing every
+ * frame of the fight, not to forbid an impact frame -- but at 1.0 the boss's
+ * entire upper body went to white and the bloom pass smeared it into a blob
+ * with no character left in it. A ceiling a hair over the threshold lets the
+ * brightest parts glow and leaves the drawing intact.
+ *
+ * Returns to HIGHLIGHT_CEILING the moment the flash is out.
+ */
+export const FLASH_CEILING = 0.72;
+
+/**
+ * What a hit tints toward, as a multiplier on the sampled texture.
+ *
+ * Past 1 deliberately -- `MeshBasicMaterial.color` multiplies the map, so a
+ * value of 1 is "unchanged" and anything brighter has to exceed it. Cool white
+ * for an ordinary hit, hot ember for a critical, which is the same colour
+ * vocabulary the damage numbers already use: red-ward for damage, ember for
+ * a critical.
+ *
+ * MODEST, because these compound with the lifted ceiling rather than being
+ * capped by it. The first pass ran to 3.2 and the two together turned the
+ * target into a white silhouette -- a strobe, not a flash. A hit should read
+ * as the character being LIT, not as the character being deleted.
+ */
+const FLASH_HIT = new THREE.Color(1.45, 1.45, 1.65);
+const FLASH_CRITICAL = new THREE.Color(1.9, 1.2, 0.85);
+
+/**
  * Injects a soft highlight knee into a stock MeshBasicMaterial.
  *
  * The rolloff is exponential rather than a hard clamp: `capped` approaches
@@ -237,10 +291,22 @@ function applyHighlightRolloff(
   material: THREE.MeshBasicMaterial,
   knee: number,
   ceiling: number,
-): void {
+): { ceiling: THREE.IUniform<number> } {
+  /*
+   * The ceiling uniform is HANDED BACK, not just set.
+   *
+   * `onBeforeCompile` runs lazily -- three calls it the first time the
+   * material is compiled, which is on the first frame the sprite is drawn --
+   * so this object is created up front and its `value` is what the shader
+   * reads. The impact flash raises it for a few frames; without a reference
+   * out here there is no way to reach it again, and the flash has nothing to
+   * work with. See the note on flashing in `react`.
+   */
+  const ceilingUniform: THREE.IUniform<number> = { value: ceiling };
+
   material.onBeforeCompile = (shader) => {
     shader.uniforms['uHighlightKnee'] = { value: knee };
-    shader.uniforms['uHighlightCeiling'] = { value: ceiling };
+    shader.uniforms['uHighlightCeiling'] = ceilingUniform;
 
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -268,8 +334,15 @@ function applyHighlightRolloff(
   /* Without a distinct cache key three.js hands back the cached program for
      a stock MeshBasicMaterial and the injected code silently never runs --
      a failure that looks exactly like the constants being wrong. */
+  /* The cache key deliberately uses the STARTING ceiling, not the live
+     uniform. A key that changed with the flash would recompile the shader on
+     every hit -- a stall at exactly the moment the game is meant to feel
+     responsive. Uniforms are meant to be varied without recompiling; that is
+     the whole point of them. */
   material.customProgramCacheKey = () =>
     `characterHighlightRolloff:${knee}:${ceiling}`;
+
+  return { ceiling: ceilingUniform };
 }
 
 /* ------------------------------------------------------------------ */
@@ -455,7 +528,7 @@ export function createCharacterSprite(
     fog: false,
   });
 
-  applyHighlightRolloff(material, highlightKnee, highlightCeiling);
+  const rolloff = applyHighlightRolloff(material, highlightKnee, highlightCeiling);
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = `sprite-mesh:${name}`;
@@ -524,6 +597,30 @@ export function createCharacterSprite(
     group.add(shadow);
   }
 
+  /* --- Reaction ------------------------------------------------------- */
+
+  /*
+   * What being hit looks like.
+   *
+   * State is a start time and a direction; everything else is derived from
+   * `age` by impact.ts, so nothing here accumulates and a reaction cannot
+   * drift out of step with the clock driving it.
+   */
+  let reactionAt: number | null = null;
+  let reactionDirection = 1;
+  let reactionAmplitude = RECOIL_BASE;
+  let reactionCritical = false;
+
+  /* The mesh's authored offset, captured before anything moves it. Recoil is
+     added to this rather than replacing it -- the y here is what puts the
+     character's FEET on the floor rather than the plane's bottom edge. */
+  const restX = mesh.position.x;
+
+  /* Held so the flash can be undone exactly. `MeshBasicMaterial.color`
+     multiplies the map, so the resting value is white and returning to it is
+     the whole of "stop flashing". */
+  const restColour = material.color.clone();
+
   /* --- Public interface ---------------------------------------------- */
 
   const headWorld = new THREE.Vector3();
@@ -537,6 +634,60 @@ export function createCharacterSprite(
     size,
     feetInset,
     contentHeight,
+
+    react(kind: 'hit' | 'critical', direction: -1 | 1, at: number) {
+      reactionAt = at;
+      reactionDirection = direction;
+      reactionCritical = kind === 'critical';
+      reactionAmplitude = reactionCritical ? RECOIL_MAX : RECOIL_BASE;
+    },
+
+    updateReaction(now: number, motion = true) {
+      if (reactionAt === null) return;
+
+      const age = now - reactionAt;
+      const flash = flashStrength(age);
+      /* `motion` off is reduced motion: the flash still fires, the stagger
+         does not. A flash is a change of colour in place, which is not what
+         anybody means by motion sickness. */
+      const offset = motion
+        ? recoilOffset(age, RECOIL_SECONDS, reactionAmplitude)
+        : 0;
+
+      mesh.position.x = restX + offset * reactionDirection;
+
+      if (flash > 0) {
+        /*
+         * THE FLASH CANNOT WORK BY BRIGHTENING ALONE, and this is the one
+         * genuinely surprising thing in this file.
+         *
+         * `applyHighlightRolloff` holds every character pixel under
+         * HIGHLIGHT_CEILING so the bloom pass never picks a sprite up, and it
+         * runs at `#include <map_fragment>` -- AFTER material.color has
+         * multiplied in. Scale the colour past 1 and the knee compresses it
+         * straight back down; the flash silently does nothing.
+         *
+         * So it does two things. It TINTS, because the rolloff preserves
+         * chroma -- it scales the whole RGB triple by a luminance ratio
+         * rather than clamping channels. And it LIFTS THE CEILING for the
+         * duration, which is a deliberate, temporary suspension of a rule
+         * that exists for a different purpose: the rolloff is there to stop
+         * AUTHORED rim lights smearing into bloom, not to forbid an impact
+         * frame.
+         */
+        const tint = reactionCritical ? FLASH_CRITICAL : FLASH_HIT;
+        material.color.copy(restColour).lerp(tint, flash);
+        rolloff.ceiling.value =
+          highlightCeiling + (FLASH_CEILING - highlightCeiling) * flash;
+      } else {
+        material.color.copy(restColour);
+        rolloff.ceiling.value = highlightCeiling;
+        /* Settled, in both channels. Dropping the start time is what stops
+           every sprite recomputing a finished reaction on every frame for the
+           rest of the battle. */
+        if (offset === 0) reactionAt = null;
+      }
+    },
 
     headScreenPosition(camera: THREE.Camera) {
       /* Top of the CHARACTER, in world space, then projected to clip space. */

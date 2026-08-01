@@ -73,6 +73,17 @@ export interface DebugState {
         DOM damage numbers. Outside 0..1 means off-screen. */
     headScreen: [number, number];
     hasShadow: boolean;
+    /**
+     * How far the sprite is currently staggered from its mark, in world
+     * units. Signed: negative is screen-left.
+     *
+     * Reported because a recoil is otherwise UNVERIFIABLE. It lives on the
+     * mesh inside the group -- deliberately, so `position` above keeps
+     * meaning the character's place on the stage -- which puts it out of
+     * reach of every other channel: the state is right, the DOM is right,
+     * and a screenshot of a 0.2-unit shift is a matter of opinion.
+     */
+    recoil: number;
   }>;
 
   /**

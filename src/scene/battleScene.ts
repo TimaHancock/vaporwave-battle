@@ -21,6 +21,7 @@ import {
   terrainIndices,
   type BankOptions,
 } from './mountains';
+import { recoilDirection } from './impact';
 import {
   arenaEmission,
   colonnadePositions,
@@ -214,10 +215,43 @@ export interface BattleScene {
    * cards and the log are not.
    */
   setMood(mood: ArenaMood): void;
+  /**
+   * Make a character react to being hit.
+   *
+   * Event-driven, like the float layer and for the same reason: "kira was hit
+   * for 145" is not recoverable from the state afterwards, only from the event
+   * that caused it. `at` is a scene-clock time in seconds.
+   *
+   * Unknown ids are ignored rather than throwing. A sprite can legitimately be
+   * absent -- the cast is spawned after the first render, and a battle can
+   * resolve events for an actor whose art failed to load -- and a missing
+   * flinch is not worth taking the frame down for.
+   */
+  reactToHit(targetId: string, sourceId: string, isCritical: boolean, at: number): void;
   dispose(): void;
 }
 
+/**
+ * Whether the scene is allowed to move things that do not have to move.
+ *
+ * Read once at construction rather than per frame: the query is cheap but the
+ * answer is a user preference, not a per-frame decision, and reading it in the
+ * update loop invites treating it as one.
+ *
+ * NOTE THE ASYMMETRY WITH THE FLOAT LAYER. There, `animation: none` under
+ * reduced motion would be a BUG -- removal is driven by `animationend`, so a
+ * number that never animates never leaves. Nothing here waits on an animation
+ * to finish, so switching the stagger off is simply switching it off. The
+ * flash still fires: a colour changing in place is not what anybody means by
+ * motion.
+ */
+function motionIsWelcome(): boolean {
+  if (typeof window === 'undefined' || window.matchMedia === undefined) return true;
+  return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 export function createBattleScene(rng: Rng): BattleScene {
+  const allowMotion = motionIsWelcome();
   const registry = new DisposalRegistry();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PALETTE.void);
@@ -857,7 +891,29 @@ export function createBattleScene(rng: Rng): BattleScene {
       deckMaterial.emissiveIntensity = DECK_EMISSIVE_REST * deck;
     },
 
+    reactToHit(targetId, sourceId, isCritical, at) {
+      const target = cast.find((sprite) => sprite.name === targetId);
+      if (target === undefined) return;
+
+      /* Away from whoever swung. Derived from the two positions rather than
+         from sides, so re-laying out the cast cannot silently invert it. The
+         attacker being absent is not a reason to skip the flinch -- fall back
+         to the target's own side of centre. */
+      const source = cast.find((sprite) => sprite.name === sourceId);
+      const direction = recoilDirection(
+        source?.group.position ?? { x: 0, y: 0, z: 0 },
+        target.group.position,
+      );
+
+      target.react(isCritical ? 'critical' : 'hit', direction, at);
+    },
+
     update(elapsedSeconds: number) {
+      /* Reactions run off the SAME clock as the dice, which is what makes
+         hit-stop free: main.ts holds this value still during a freeze, so the
+         flash stays lit and the stagger does not start until it releases. */
+      for (const sprite of cast) sprite.updateReaction(elapsedSeconds, allowMotion);
+
       for (const die of dice) {
         const spin = die.userData['spin'] as number;
         const phase = die.userData['bobPhase'] as number;

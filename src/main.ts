@@ -49,6 +49,7 @@ import { createPostProcessing } from './scene/post';
 import { loadCharacterTexture } from './scene/sprite';
 import { layoutBoss, layoutParty } from './scene/spriteLayout';
 import type { ArenaMood } from './scene/arena';
+import { hitStopFor, HIT_STOP_MS } from './scene/impact';
 import { BOSS, CAST, PARTY } from './scene/cast';
 import { renderHud, toHudModel } from './ui/hud';
 import {
@@ -117,6 +118,51 @@ const bossMaxHp = nonNegativeParam(params.get('bossHp'));
  */
 const DEFAULT_FLOAT_MS = 900;
 const floatMs = nonNegativeParam(params.get('floatMs')) ?? DEFAULT_FLOAT_MS;
+
+/**
+ * How long a landed hit freezes the game for, in milliseconds.
+ *
+ * Zero disables hit-stop outright, which is what the screenshot harness wants
+ * for any shot that is not about impact -- and what anyone who dislikes the
+ * effect will reach for. `HIT_STOP_MS` is short by design; see impact.ts.
+ *
+ * Deliberately NOT folded into `?stepMs=`. The sequencer's pause is injected
+ * so it can run at zero delay under test, and a presentational freeze has no
+ * business inside a module whose whole value is being testable in
+ * milliseconds.
+ *
+ * OFF BY DEFAULT IN STEP MODE, and that is a rule rather than a convenience.
+ * `?time=` means "render one frame and halt the clock", and hit-stop is a
+ * clock effect -- on a halted clock the scene half of it does nothing at all
+ * and only the DOM half remains, freezing an interface nobody is animating.
+ * Leaving it on tripled the e2e suite: sixty-odd specs load with `?time=0`
+ * and every landed hit was paying for a pause with no visible half.
+ *
+ * An explicit `?hitStop=` still wins, which is how the tests that are ABOUT
+ * hit-stop, and the `impact` shot, get at it.
+ */
+const hitStopMs =
+  prefersReducedMotion() || (isStepMode && params.get('hitStop') === null)
+    ? 0
+    : nonNegativeParam(params.get('hitStop')) ?? HIT_STOP_MS;
+
+/**
+ * Whether the reader has asked for less movement.
+ *
+ * Hit-stop goes OFF entirely when they have, and so does the recoil. That is
+ * the opposite of the rule the float layer follows, where `animation: none`
+ * would be a bug -- a number's removal is driven by `animationend`, so one
+ * that never animates never leaves. Nothing in hit-stop waits on an animation
+ * to finish, so switching it off is simply switching it off.
+ *
+ * Held to a function so the two places that ask -- here and battleScene's
+ * `motionIsWelcome` -- are asking the same question of the same media query
+ * rather than two lookalike strings.
+ */
+function prefersReducedMotion(): boolean {
+  if (window.matchMedia === undefined) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
 
 /** Parses a non-negative integer parameter, ignoring anything else. */
 function nonNegativeParam(raw: string | null): number | undefined {
@@ -275,6 +321,138 @@ async function main(
       if (at === null) continue;
       floats.spawn(event, at, targetId);
     }
+
+    /*
+     * Impact, off the SAME pass over the SAME list.
+     *
+     * The flinch and the number it belongs to are fired together, from one
+     * slice of one array, so they cannot disagree about what landed -- the
+     * same argument that keeps the HUD and the debug channel on one view.
+     *
+     * Order matters within this function: the floats are spawned first so the
+     * freeze below catches their arrival animation. Freeze then spawn and the
+     * number flies away during the pause that was meant to hold it.
+     */
+    for (const event of fresh) {
+      if (event.kind !== 'damage') continue;
+      battle.reactToHit(
+        event.targetId,
+        event.sourceId,
+        event.isCritical,
+        currentTime,
+      );
+    }
+
+    freeze(hitStopFor(fresh, hitStopMs));
+  }
+
+  /* --- Hit-stop ---------------------------------------------------- */
+
+  /*
+   * The freeze.
+   *
+   * Two halves, because there are two clocks in this game. The scene runs on
+   * `THREE.Clock`; the interface runs on the browser's animation timeline, and
+   * CSS transitions are on it too -- so an HP bar's 400ms drain is an
+   * `Animation` object like any other and pauses mid-drain along with the
+   * damage number and the chain pulse.
+   */
+
+  /** Total seconds the scene clock has been held. Subtracted from every read. */
+  let frozenSeconds = 0;
+  /** When the current freeze started, in `clock` seconds. Null when running. */
+  let frozenAt: number | null = null;
+  /** Real-time deadline for the release, so a second hit EXTENDS rather than nests. */
+  let releaseAt = 0;
+  let releaseTimer: number | null = null;
+  /** Exactly what was paused, so exactly that is resumed. */
+  const paused = new Set<Animation>();
+
+  function freeze(ms: number): void {
+    if (ms <= 0) return;
+
+    releaseAt = Math.max(releaseAt, performance.now() + ms);
+
+    if (frozenAt === null) {
+      frozenAt = clock.getElapsedTime();
+    }
+
+    /*
+     * Both roots, not `document`. A freeze that reached everything could stop
+     * something that must never stop, and the two roots are exactly the
+     * transient interface: the HUD's bars and pulses, and the float layer.
+     *
+     * Guarded because `getAnimations` is not universal, and an interface that
+     * cannot pause should carry on rather than throw during a hit.
+     */
+    for (const root of [hudRoot, floatRoot]) {
+      if (root.getAnimations === undefined) continue;
+      for (const animation of root.getAnimations({ subtree: true })) {
+        if (animation.playState !== 'running') continue;
+        animation.pause();
+        paused.add(animation);
+      }
+    }
+
+    scheduleRelease();
+  }
+
+  /**
+   * Let go, always.
+   *
+   * THE DANGEROUS PART OF THIS WHOLE FEATURE. A paused animation never resumes
+   * itself, so a freeze that fails to release leaves the interface stopped
+   * forever -- bars frozen mid-drain, numbers stuck on screen, and no way back
+   * short of a reload. That is strictly worse than not having hit-stop at all,
+   * which is why the release is a single owned timer rather than one per hit,
+   * why a second hit extends the deadline instead of nesting inside it, and
+   * why the resume runs in a `finally`.
+   */
+  function scheduleRelease(): void {
+    if (releaseTimer !== null) return;
+
+    const tick = (): void => {
+      releaseTimer = null;
+      const remaining = releaseAt - performance.now();
+      if (remaining > 0) {
+        releaseTimer = window.setTimeout(tick, remaining);
+        return;
+      }
+      release();
+    };
+
+    releaseTimer = window.setTimeout(tick, Math.max(releaseAt - performance.now(), 0));
+  }
+
+  function release(): void {
+    try {
+      for (const animation of paused) {
+        /* A float can be removed from the DOM while paused -- its own removal
+           timer is a `setTimeout` that does not care about our freeze. Playing
+           a cancelled animation is harmless; not playing a live one is not. */
+        animation.play();
+      }
+    } finally {
+      paused.clear();
+      if (frozenAt !== null) {
+        frozenSeconds += clock.getElapsedTime() - frozenAt;
+        frozenAt = null;
+      }
+    }
+  }
+
+  /**
+   * The scene's clock, with frozen time removed.
+   *
+   * Every reaction curve in impact.ts is a function of age against this, so
+   * holding it still is the entire hit-stop mechanism on the canvas side: the
+   * flash stays lit for exactly as long as the game is stopped, and the
+   * stagger does not begin until it releases. Freeze first, then move, with no
+   * sequencing anywhere.
+   */
+  function sceneTime(): number {
+    if (frozenAt !== null) return frozenAt - frozenSeconds;
+    return clock.getElapsedTime() - frozenSeconds;
   }
 
   /** The last mood applied, so `refresh` can tell when there is nothing to do. */
@@ -461,6 +639,7 @@ async function main(
           feetInset: Number(sprite.feetInset.toFixed(4)),
           contentHeight: Number(sprite.contentHeight.toFixed(4)),
           renderOrder: sprite.mesh.renderOrder,
+          recoil: sprite.mesh.position.x,
           headScreen: [
             Number(head.x.toFixed(4)),
             Number(head.y.toFixed(4)),
@@ -609,7 +788,9 @@ async function main(
   } else {
     const loop = (): void => {
       window.requestAnimationFrame(loop);
-      drawFrame(clock.getElapsedTime());
+      /* Frozen time removed, so a hit-stop holds the scene where it was
+         rather than skipping the frames it swallowed. */
+      drawFrame(sceneTime());
     };
     loop();
   }

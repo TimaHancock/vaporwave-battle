@@ -582,10 +582,22 @@ test.describe('cards track the battle', () => {
     await idle(page);
 
     /* The bars are mid-flight the instant the state settles -- that is the
-       point of them. Wait out the 400ms transition before measuring, or this
-       samples an animation frame and fails on a number that was correct a
-       moment later. Comfortably longer than --bar-motion. */
-    await page.waitForTimeout(700);
+       point of them -- so measuring straight away samples an animation frame
+       and fails on a number that was correct a moment later.
+
+       WAIT FOR THE TRANSITIONS, NOT FOR A DURATION. This used to sleep 700ms
+       against a 400ms transition, which was fine until hit-stop started
+       PAUSING those transitions mid-drain: a bar's wall-clock time is now
+       400ms plus however long the fight froze while it was running, so any
+       fixed budget is a guess that gets tighter under a loaded parallel run.
+       Asking the animations when they are done is exact and cannot drift. */
+    await page.waitForFunction(() =>
+      Array.from(
+        document.querySelectorAll('.hud-card__fill'),
+      ).every((fill) =>
+        fill.getAnimations().every((animation) => animation.playState === 'finished'),
+      ),
+    );
 
     const state = await actors(page);
 
@@ -1173,6 +1185,124 @@ test.describe('floating combat numbers', () => {
        element per turn passes a single-turn check. */
     for (let turn = 0; turn < 3; turn++) await takeTurn(page);
     await expect(floats(page)).toHaveCount(0, { timeout: 5_000 });
+  });
+
+  test.describe('hit-stop', () => {
+    /**
+     * What is currently paused under the HUD and the float layer.
+     *
+     * Names rather than a count, so a failure says WHICH animation is stuck
+     * instead of how many. "expected 3 to be 0" sends you hunting; "chain
+     * pulse, two floats" does not.
+     */
+    async function pausedNames(page: Page): Promise<string[]> {
+      return page.evaluate(() =>
+        ['#hud', '#floats']
+          .flatMap((selector) =>
+            Array.from(
+              document.querySelector(selector)?.getAnimations({ subtree: true }) ?? [],
+            ),
+          )
+          .filter((animation) => animation.playState === 'paused')
+          .map((animation) => {
+            const named = animation as Animation & {
+              animationName?: string;
+              transitionProperty?: string;
+            };
+            return named.animationName ?? named.transitionProperty ?? 'unnamed';
+          })
+          .sort(),
+      );
+    }
+
+    test('holds the interface still on impact', async ({ page }) => {
+      /* A long freeze so the paused window is bigger than the round trip. At
+         the shipped 70ms this is unobservable from here, which is the point
+         of the effect but no use as an assertion. */
+      await ready(page, '&stepMs=0&floatMs=60000&hitStop=3000');
+
+      await page.keyboard.press('Enter');
+      await expect
+        .poll(() => pausedNames(page).then((names) => names.length), {
+          timeout: 5_000,
+        })
+        .toBeGreaterThan(0);
+    });
+
+    test('ALWAYS lets go again', async ({ page }) => {
+      /* THE ONE THAT MATTERS. A paused animation never resumes itself, so a
+         freeze that fails to release leaves the interface stopped forever --
+         bars frozen mid-drain, numbers stuck on screen, no way back short of
+         a reload. That is strictly worse than having no hit-stop at all, and
+         it is invisible to every other channel: the DOM is present and
+         correct, the state is right, nothing has thrown. */
+      await ready(page, '&stepMs=0&floatMs=60000&hitStop=300');
+
+      await page.keyboard.press('Enter');
+      await idle(page);
+      await expect.poll(() => pausedNames(page), { timeout: 5_000 }).toEqual([]);
+
+      /* And still nothing stuck after several more hits -- a release that
+         leaks one animation per freeze passes a single-hit check. */
+      for (let turn = 0; turn < 3; turn++) await takeTurn(page);
+      await expect.poll(() => pausedNames(page), { timeout: 5_000 }).toEqual([]);
+    });
+
+    test('staggers the struck character away from the attacker', async ({ page }) => {
+      /* The recoil is otherwise UNVERIFIABLE. It lives on the mesh inside the
+         sprite's group -- deliberately, so `position` keeps meaning where the
+         character stands -- which puts it out of reach of every other
+         channel: the state is right, the DOM is right, and a screenshot of a
+         0.2-unit shift is a matter of opinion.
+
+         `?time=0` holds the clock, so the reaction sits at age 0 and the
+         stagger stays at its peak instead of easing home before the assertion
+         can read it. */
+      await ready(page, '&stepMs=0&hitStop=0');
+
+      const before = await page.evaluate(
+        () => window.__debugState!.sprites.find((s) => s.name === 'apollyon')!.recoil,
+      );
+      expect(before, 'at rest before anyone swings').toBe(0);
+
+      await takeTurn(page);
+
+      const after = await page.evaluate(
+        () => window.__debugState!.sprites.find((s) => s.name === 'apollyon')!.recoil,
+      );
+      /* The party is left of centre and the boss right of it, so a blow from
+         the party throws the boss further right. Away from the attacker, and
+         derived from the two positions rather than from sides -- so this fails
+         if a layout change ever inverts it. */
+      expect(after, 'boss staggers right, away from the party').toBeGreaterThan(0);
+    });
+
+    test('is off at zero, so the harness can opt out', async ({ page }) => {
+      await ready(page, '&stepMs=0&floatMs=60000&hitStop=0');
+      await page.keyboard.press('Enter');
+      /* No freeze at all: nothing is ever paused, even mid-turn. */
+      expect(await pausedNames(page)).toEqual([]);
+      await idle(page);
+      expect(await pausedNames(page)).toEqual([]);
+    });
+
+    test('does not freeze at all when reduced motion is requested', async ({
+      page,
+    }) => {
+      /* The OPPOSITE of the float layer's rule, where switching the animation
+         off would be a bug because removal rides on `animationend`. Nothing
+         in hit-stop waits on an animation to finish, so off means off.
+
+         emulateMedia BEFORE ready, and the order is load-bearing rather than
+         stylistic: main.ts reads the preference once at module scope, which
+         is before the first paint. Emulating it after navigation would set
+         the media query on a page that had already decided. */
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await ready(page, '&stepMs=0&floatMs=60000&hitStop=3000');
+
+      await page.keyboard.press('Enter');
+      expect(await pausedNames(page)).toEqual([]);
+    });
   });
 
   test('the layer survives the HUD rebuilding itself', async ({ page }) => {

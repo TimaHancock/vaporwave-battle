@@ -126,6 +126,7 @@ earning its place in `dist.spec.ts`.
 | `?stepMs=` | Sequencer pause between beats. Default 350. Enemy beats are `ENEMY_BEAT_MULTIPLIER`× this. |
 | `?bossHp=` | Override boss max HP **and** HP. For the victory e2e test. |
 | `?floatMs=` | How long a damage number lives. Default 900. |
+| `?hitStop=` | Freeze on a landed hit, ms. Default 70, **0 under `?time=`**; 0 disables. |
 
 `?floatMs=` exists so the effect can be photographed at all: a number is gone
 900ms after the hit, and `shoot.mjs` captures after the turn has settled. It
@@ -333,6 +334,63 @@ on a legitimately unlocked battle.
   illegal and `moveCursor` skips disabled entries, so the cursor cannot get
   somewhere `confirm` would have to refuse. A closure test walks every
   reachable path and asserts `takeAction` accepts the result.
+- **A brightness flash on a sprite CANNOT work through `material.color`.**
+  `applyHighlightRolloff` injects a luminance knee that holds every character
+  pixel under `HIGHLIGHT_CEILING`, so the bloom pass never picks a character
+  up — and it runs at `#include <map_fragment>`, *after* `material.color` has
+  multiplied in. Scale the colour past 1 and the knee compresses it straight
+  back down and the flash silently does nothing. The impact flash therefore
+  tints (chroma survives the rolloff, which scales the RGB triple rather than
+  clamping channels) **and** lifts `uHighlightCeiling` for its duration — a
+  deliberate, temporary suspension of a rule that exists to stop *authored*
+  rim lights smearing, not to forbid an impact frame. The uniform is handed
+  back out of `applyHighlightRolloff` for exactly this.
+- **Keep the flash's ceiling a hair over the bloom threshold**, not far over.
+  At 1.0 against a 0.68 threshold the boss's whole upper body went white and
+  the bloom pass smeared it into a blob with no drawing left in it. The tint
+  multipliers compound with the ceiling rather than being capped by it.
+- **Recoil moves `mesh.position`, NEVER `group.position`.** Four separate
+  things read the group: `headScreenPosition`, `__debugState.sprites`, the
+  "every sprite stands on the platform" test, and `assignRenderOrders`.
+  Offsetting the group would make all four describe a character mid-flinch.
+  It is also the truer model — a flinch is the character reacting, not the
+  character's place on the stage changing — and the contact shadow, a sibling
+  of the mesh, stays put and keeps the figure grounded while it staggers. The
+  offset is published as `sprites[].recoil` because it is otherwise
+  unverifiable: state and DOM are both right, and a screenshot of a 0.2-unit
+  shift is a matter of opinion.
+- **Hit-stop works by holding the scene clock still**, and every curve in
+  `scene/impact.ts` is a function of age against that clock. So a freeze pins
+  the flash at full strength for exactly as long as the game is stopped and
+  keeps the stagger from starting until it releases. Freeze first, then move —
+  the order hit-stop wants — with no sequencing anywhere. It is also why
+  `?time=` can photograph the impact frame at all: a stepped clock leaves a
+  reaction at age 0 forever.
+- **A PAUSED ANIMATION NEVER RESUMES ITSELF.** Hit-stop pauses everything
+  under `#hud` and `#floats` via `getAnimations({ subtree: true })`, and a
+  freeze that fails to release leaves the interface stopped permanently —
+  bars frozen mid-drain, numbers stuck, no way back but a reload. Strictly
+  worse than not having the feature. Hence one owned timer rather than one
+  per hit, a second hit that EXTENDS the deadline instead of nesting, and a
+  resume in a `finally`. `e2e/hud.spec.ts` asserts nothing stays paused.
+- **Hit-stop is OFF BY DEFAULT under `?time=`**, and that is a rule rather
+  than a convenience. `?time=` means "render one frame and halt the clock",
+  and hit-stop is a clock effect — on a halted clock its scene half does
+  nothing at all and only the DOM half survives, freezing an interface nobody
+  is animating. Leaving it on TRIPLED the e2e suite, because sixty-odd specs
+  load with `?time=0` and every landed hit was paying for a pause with no
+  visible half. An explicit `?hitStop=` still wins, which is how the specs
+  that are about hit-stop reach it.
+- **Hit-stop lengthens a CSS transition's wall-clock time**, because pausing
+  is exactly what it does. Any test that waited a fixed duration for a bar to
+  settle is now guessing; wait on `getAnimations()` reaching `finished`
+  instead. One test had to change for this and it was the right change
+  anyway.
+- **Reduced motion switches hit-stop and the recoil OFF, and that is safe** —
+  the opposite of the float layer, where `animation: none` would be a bug
+  because removal rides on `animationend`. Nothing in hit-stop waits on an
+  animation to finish. The flash stays: a colour changing in place is not what
+  anybody means by motion.
 - **Debug state is published off the render loop too.** In `?time=` step
   mode `drawFrame` runs once, so a snapshot built only there would freeze
   `isLocked` at its boot value while the UI carried on.
@@ -575,6 +633,17 @@ functions of state, which means every channel can see them. A ring is
 time-driven, and step mode renders at a frozen time — so the one channel that
 judges this work could not have judged it.
 
+**Blows land now.** `scene/impact.ts` is the pure module: hit-stop duration
+from a commit's events, the recoil curve, the flash curve, and which way a blow
+throws its target. `sprite.ts` owns the reaction, `battleScene.ts` drives it off
+the same clock as the dice, and `main.ts` owns the freeze — fired from the same
+`view.log` diff that spawns the damage numbers, so a flinch and its number
+cannot disagree about what landed.
+
+The whole effect turns on one number, `HIT_STOP_MS`, and it is the one thing
+here no channel can judge: 70ms is either impact or a dropped frame, and only
+playing it tells you which. `?hitStop=` exists so that is cheap to try.
+
 Not done, and the obvious next steps:
 
 - **Circuit-trace clouds.** The site header has them; the scene does not. The
@@ -586,7 +655,6 @@ Not done, and the obvious next steps:
 - **Per-enemy-turn granularity.** `advance` resolves every enemy turn in one
   call, so a boss turn narrates beat by beat but its HP change lands in a
   single commit. Splitting it needs a new entry point in `battle.ts`.
-- **Sprite reactions.** Nothing on the canvas moves when an actor is hit.
 
 Use plan mode before: the damage-number/animation layer and the remaining
 Phase 5 region passes.

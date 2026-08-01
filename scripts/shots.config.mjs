@@ -171,6 +171,33 @@ export const SHOTS = [
     clip: { x: 0.04, y: 0.42, width: 0.92, height: 0.44 },
   },
   {
+    name: 'impact',
+    description:
+      'The instant a blow lands: the struck character flashing, staggered ' +
+      'off its mark, with its number over it. The questions no assertion can ' +
+      'answer -- does the flash read as HIT, or merely as recoloured? Does ' +
+      'the stagger separate the character from its own contact shadow badly ' +
+      'enough to look like sliding rather than reacting? Does the lifted ' +
+      'highlight ceiling blow past the silhouette and smear? And is a ' +
+      'critical visibly heavier than an ordinary hit, or just bigger?',
+    seed: 7,
+    time: 1.0,
+    /* WHY THIS SHOT WORKS AT ALL, and it is worth knowing: `?time=` holds the
+       clock, and every impact curve is a function of age against that clock.
+       So a reaction registered during a stepped frame sits at age 0 -- the
+       peak of both the flash and the recoil -- and stays there. The
+       screenshot channel photographs the impact frame exactly, which is the
+       one thing it can do that watching the game cannot.
+
+       seed 7 crits on the opening turn, so an ordinary hit and a critical
+       land in one capture. floatMs holds the numbers open beside them. */
+    query: 'stepMs=0&floatMs=60000',
+    keys: ['Enter'],
+    settle: true,
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0.4, y: 0.1, width: 0.6, height: 0.62 },
+  },
+  {
     name: 'damage_numbers',
     description:
       'One turn resolved, with the floating numbers held open. The questions ' +
