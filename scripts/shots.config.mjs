@@ -102,6 +102,26 @@ export const SHOTS = [
     clip: { x: 0, y: 0, width: 0.2, height: 0.1 },
   },
   {
+    name: 'valley',
+    description:
+      'The horizon band: three mountain ranges flanking the sun, their ' +
+      'crest lines, and the grid ocean running out to meet them. The ' +
+      'questions no assertion can answer -- do the ridges read as a VALLEY ' +
+      'the arena sits down inside, or as a flat backdrop hung behind it? Is ' +
+      'the sun seen through a window rather than over a wall? Do the three ' +
+      'ranges separate in depth, or flatten into one shape? Is the cyan ' +
+      'crest a neon EDGE or a stripe? And does the grid now read as an ' +
+      'ocean rather than as a few lines near the platform?',
+    seed: 1337,
+    time: 2.0,
+    /* No keys and no HUD subject -- this is a scene shot, so the frame is
+       what matters and `viewport` is the right knob rather than `scale`.
+       Cropped to the horizon band because the mountains are a thin slice of
+       a full frame and unreadable at native size. */
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0, y: 0.02, width: 1, height: 0.45 },
+  },
+  {
     name: 'damage_numbers',
     description:
       'One turn resolved, with the floating numbers held open. The questions ' +

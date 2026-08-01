@@ -15,6 +15,13 @@ import * as THREE from 'three';
 import type { Rng } from '../rng';
 import { createCharacterSprite, type CharacterSprite } from './sprite';
 import { assignRenderOrders, type Vec3 } from './spriteLayout';
+import {
+  crestRuns,
+  frameHalfWidth,
+  HORIZON_Y,
+  ridgeProfile,
+  type RidgeOptions,
+} from './mountains';
 /* Type-only, so it erases at build time -- the scene shares battle
    vocabulary without taking a dependency on battle logic. */
 import type { Side } from '../battle/types';
@@ -60,6 +67,16 @@ export const PALETTE = {
   void: 0x13060d,
   /** Mid plum, the dominant field colour. */
   plum: 0x29081e,
+  /**
+   * Mountain silhouettes. A lighter VALUE of the plum hue, not a new colour.
+   *
+   * Plum itself is only a few points off the void, so a ridge painted in it
+   * and then fogged toward the void was invisible -- the crest lines floated
+   * with no mass under them. The site's mountains are a clearly readable dark
+   * maroon against a near-black sky, and this is that. Same hue family, same
+   * warm bias (R > B); only the value moved.
+   */
+  ridge: 0x4a1533,
   /** Hot magenta -- the brand's primary accent. */
   horizon: 0xc61e82,
   /** Secondary pink, for bands and softer accents. */
@@ -172,10 +189,25 @@ export function createBattleScene(rng: Rng): BattleScene {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PALETTE.void);
 
-  /* Distance fog. Does double duty: it sells depth on the flat grid, and
-     it hides the far edge of the plane so the horizon reads as infinite
-     rather than as a plane that stops. */
-  scene.fog = new THREE.Fog(PALETTE.void, 18, 70);
+  /*
+   * Distance fog. Three jobs, and the third one is new:
+   *   1. sells depth on the flat grid
+   *   2. hides the far edge of the plane, so the horizon reads as infinite
+   *      rather than as a plane that stops
+   *   3. recedes the mountain ranges -- their entire colour treatment is
+   *      where they sit in this gradient
+   *
+   * far was 70 and is now 96. The grid was dissolving so early that the
+   * "neon grid ocean" was three faint lines either side of the platform,
+   * and the ranges had nowhere to sit between visible and gone. Moving it
+   * re-tunes the ridges as much as the water: one decision, not two.
+   *
+   * WATCH THE SUN WHEN CHANGING THIS. The sun sets cleanly because the
+   * water overtakes the disc ABOVE where the grid fades out; push the fade
+   * far enough and the order flips, leaving the sun's cut edge hanging over
+   * live grid lines. That is a screenshot check, not an assertion.
+   */
+  scene.fog = new THREE.Fog(PALETTE.void, 22, 96);
 
   const camera = new THREE.PerspectiveCamera(
     CAMERA.fov,
@@ -237,7 +269,12 @@ export function createBattleScene(rng: Rng): BattleScene {
   const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
   for (const material of gridMaterials) {
     material.transparent = true;
-    material.opacity = 0.55;
+    /* 0.55 -> 0.85. At the old value the ocean was a suggestion: a few lines
+       either side of the platform and nothing further out, so the valley had
+       no floor. It is the surface the whole composition stands on and it
+       should read as one. Still short of 1.0 -- the grid is neon on water,
+       not a wireframe drawn on top of the scene. */
+    material.opacity = 0.85;
     registry.track(material);
   }
   registry.track(grid.geometry);
@@ -273,6 +310,164 @@ export function createBattleScene(rng: Rng): BattleScene {
   const sun = new THREE.Mesh(sunGeometry, sunMaterial);
   sun.position.set(0, 5.31, -100);
   scene.add(sun);
+
+  /* --- Mountain ranges -------------------------------------------- */
+  /*
+   * The valley. Three flat silhouette cutouts at increasing depth, flanking
+   * left and right with the sun showing through the gap between them.
+   *
+   * FLAT CUTOUTS, NOT TERRAIN. The site's mountains are flat shapes and so
+   * are these -- a heightfield modelled in 3D would cost geometry, lighting
+   * decisions and a normal budget to look exactly the same through a locked
+   * camera that never moves to reveal it was flat. Depth comes from stacking
+   * several at different z, which is also what turns a backdrop into a
+   * valley.
+   *
+   * The ranges are placed inside the fog, and that is the whole colour
+   * treatment: at 18/70 these depths land roughly a third, a half and three
+   * quarters of the way to the void colour, so they recede without a single
+   * per-range material tweak. Move the fog and you re-tune these -- it is
+   * one decision, not two.
+   *
+   * Ridge shapes come from mountains.ts, which owns the constraint that
+   * matters: no crest may close over the sun's window, at any seed.
+   */
+  /* Peak heights climb with depth so the ranges stack in frame rather than
+     hiding behind each other: a far range at the near one's height is simply
+     shorter on screen and disappears. The shoulder stays low on all three so
+     each rises GENTLY out of the window -- a high shoulder turns the ridge
+     into a wall with a slot cut in it. */
+  const RANGES: readonly RidgeOptions[] = [
+    { z: -22, samples: 72, peakHeight: 7, shoulderFraction: 0.12, jitter: 0.4, baseY: HORIZON_Y - 14 },
+    { z: -34, samples: 64, peakHeight: 12, shoulderFraction: 0.14, jitter: 0.36, baseY: HORIZON_Y - 14 },
+    { z: -48, samples: 56, peakHeight: 18, shoulderFraction: 0.16, jitter: 0.32, baseY: HORIZON_Y - 14 },
+  ];
+
+  const ridgeMaterial = registry.track(
+    /* Unlit on purpose. These are silhouettes, and the light rig is a
+       contract with the CHARACTER ART -- pulling the backdrop into it would
+       mean every future light change had to be judged against mountains as
+       well as faces. PALETTE.ridge rather than plum because plum sits only a
+       few points off the void and fog then took what little was left; see
+       the palette entry. Fog still separates the three ranges from each
+       other, which is the job it is actually good at. */
+    new THREE.MeshBasicMaterial({ color: PALETTE.ridge }),
+  );
+
+  const crestMaterial = registry.track(
+    /* Cyan, and this is the one place the palette rule allows it: "a thin
+       line accent, never a fill". A crest is a thin line. It is also what
+       stops a silhouette being invisible against a near-black sky, and it
+       gives the frame the reference's blue-ridge / magenta-floor contrast.
+       If it ever over-weights the composition, PALETTE.horizon is the
+       fallback -- not a wider cyan. */
+    new THREE.LineBasicMaterial({
+      color: PALETTE.signal,
+      transparent: true,
+      opacity: 0.5,
+    }),
+  );
+
+  for (const range of RANGES) {
+    const profile = ridgeProfile(rng, range);
+
+    /* A curtain: two vertices per sample, crest and hem, walked as a strip
+       of quads. Cheaper than a triangulated mesh and produces exactly the
+       same silhouette, which is all a flat cutout has to produce. */
+    const positions = new Float32Array(profile.length * 2 * 3);
+    for (let i = 0; i < profile.length; i++) {
+      const sample = profile[i]!;
+      positions.set([sample.x, sample.y, range.z], i * 6);
+      positions.set([sample.x, range.baseY, range.z], i * 6 + 3);
+    }
+
+    const indices: number[] = [];
+    for (let i = 0; i < profile.length - 1; i++) {
+      const crest = i * 2;
+      const hem = crest + 1;
+      indices.push(crest, hem, crest + 2, hem, hem + 2, crest + 2);
+    }
+
+    const ridgeGeometry = registry.track(new THREE.BufferGeometry());
+    ridgeGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    ridgeGeometry.setIndex(indices);
+    scene.add(new THREE.Mesh(ridgeGeometry, ridgeMaterial));
+
+    /* The crest, as its own line -- one per side, NOT one across the whole
+       profile. The profile is pinned to the hem across the sun's window, so
+       a single Line dives to the bottom of the curtain, runs straight across
+       the middle of the frame and climbs back: a bright cyan diagonal
+       through the sun. crestRuns gives back only the stretches that are
+       actually mountain. Drawn from the same samples as the body, so the
+       edge cannot drift off the silhouette it is edging. */
+    for (const run of crestRuns(profile)) {
+      const crestPositions = new Float32Array(run.length * 3);
+      for (let i = 0; i < run.length; i++) {
+        const sample = run[i]!;
+        crestPositions.set([sample.x, sample.y, range.z], i * 3);
+      }
+      const crestGeometry = registry.track(new THREE.BufferGeometry());
+      crestGeometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(crestPositions, 3),
+      );
+      scene.add(new THREE.Line(crestGeometry, crestMaterial));
+    }
+  }
+
+  /* --- Stars ------------------------------------------------------- */
+  /*
+   * Behind the sun, so the disc occludes them rather than letting a starfield
+   * show through it. `fog: false` for the same reason the sun sets it: at
+   * this range fog would erase them completely.
+   *
+   * Seeded, so the sky is the same sky every run -- a drifting starfield
+   * would break the screenshot baseline for no gain.
+   */
+  const STAR_Z = -120;
+  /* Scattered across the frame at that depth, not across an arbitrary span.
+     The first version used +/-160 where the frame is only about +/-67 wide
+     there, so four stars in five were thrown outside the view and the sky
+     came out nearly empty. Deriving the bound from the frustum means the
+     count is the number of stars you actually SEE. */
+  const starSpread = Math.round(frameHalfWidth(STAR_Z));
+  const starCount = 140;
+  const starPositions = new Float32Array(starCount * 3);
+  for (let i = 0; i < starCount; i++) {
+    starPositions.set(
+      [
+        rng.int(-starSpread, starSpread),
+        /* Upper sky only. Below this the mountains and the sun own the
+           frame, and a star behind a silhouette is wasted geometry. */
+        rng.int(12, 40),
+        STAR_Z,
+      ],
+      i * 3,
+    );
+  }
+  const starGeometry = registry.track(new THREE.BufferGeometry());
+  starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+  const starMaterial = registry.track(
+    new THREE.PointsMaterial({
+      color: PALETTE.chrome,
+      /*
+       * PIXELS, not world units -- sizeAttenuation off.
+       *
+       * With attenuation on, a star 130 units away is drawn at whatever
+       * fraction of a pixel its world size projects to, which is to say it
+       * is not drawn at all. That is not a size to be tuned upward either:
+       * a star large enough to survive the projection would be a boulder if
+       * it ever came close. Stars are infinitely distant by definition, so
+       * a fixed screen size is the honest model.
+       */
+      size: 2,
+      sizeAttenuation: false,
+      transparent: true,
+      opacity: 0.75,
+      fog: false,
+    }),
+  );
+  scene.add(new THREE.Points(starGeometry, starMaterial));
 
   /* --- Combat platform -------------------------------------------- */
   const platformGeometry = registry.track(new THREE.CylinderGeometry(6, 6.4, 0.6, 48));

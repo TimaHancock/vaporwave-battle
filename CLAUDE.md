@@ -169,6 +169,40 @@ on a legitimately unlocked battle.
 - **Grounding:** every sprite gets a contact shadow, or flat art reads as
   pasted onto the scene. Shadows use `depthWrite: false` and a lower
   `renderOrder` than sprites.
+- **The sun's window is an ANGLE, not a distance.** `SUN_WINDOW_FRACTION` in
+  `scene/mountains.ts` is the share of the frame's half-width the mountain
+  crests may not close over, and `sunWindowHalfWidth(z)` converts it per
+  range. Ranges sit at different depths, so a gap fixed in world units would
+  gape on the near range and shut over the sun on the far one. The value is
+  measured against the disc, which spans ~0.22 of the half-width: at 0.34 the
+  ridges cleared the sun entirely and read as unrelated shapes in the
+  corners. `ridgeProfile` PINS the window flat rather than merely lowering
+  it, so no seed can put a peak in front of the sun — the same move
+  `fitSpacingToPlatform` makes, and a Vitest case walks 250 seeds to say so.
+- **Ridge depth and fog are one decision.** The ranges have no per-range
+  colour: their entire treatment is where they land in the fog gradient. Move
+  `scene.fog` and you have re-tuned the mountains whether you meant to or
+  not. **And watch the sun** — it sets cleanly only because the water
+  overtakes the disc above where the grid fades out, and fog moves the second
+  of those. That is a screenshot check, not an assertion.
+- **`PALETTE.ridge` is a value, not a new hue.** Silhouettes painted in
+  `plum` were invisible: plum sits a few points off `void`, and fog took what
+  little was left, so the crest lines floated with no mass under them. Same
+  hue family, same warm bias — only the value moved.
+- **The crest line is the one legitimate cyan fill-adjacent use.** The rule is
+  "a thin line accent, never a fill", and a crest is literally a thin line. It
+  is also what keeps a silhouette from vanishing against a near-black sky. If
+  it ever over-weights the frame the fallback is `horizon` magenta, not
+  broader cyan.
+- **Crests are drawn per RUN, not per profile.** A ridge is pinned flat across
+  the window, so one `Line` over the whole profile dives to the hem, crosses
+  the middle of the frame and climbs back — a bright cyan diagonal through
+  the sun. `crestRuns()` returns only the stretches above the horizon.
+- **Stars are sized in pixels** (`sizeAttenuation: false`) and scattered
+  across `frameHalfWidth(z)`, not an arbitrary span. With attenuation on, a
+  star 130 units out projects to a fraction of a pixel and is simply not
+  drawn; scattered over ±160 where the frame is ±67, four in five land off
+  screen and the sky comes out empty.
 - **The stage has hard bounds.** Platform top radius is 6;
   `PLATFORM_SAFE_RADIUS` is 5.2. `layoutParty()` auto-fits spacing so no
   party size can overflow, and `bossPosition()` rejects a boss past the lip
@@ -392,8 +426,18 @@ to, plus the chain counter over the boss. What it rests on:
   a commit: two turns in quick succession collide exactly as much as two hits
   in one turn.
 
+**The scene is a valley now.** Three flat silhouette ranges at z -22/-34/-48
+flank the sun, with a stronger grid ocean below and a starfield above. The
+ridge maths lives in `scene/mountains.ts` — pure, no three.js, Vitest-covered,
+the same split `spriteLayout.ts` follows; `battleScene.ts` only builds meshes
+from what it returns. The mountains are FLAT CUTOUTS on purpose: the camera is
+locked and never moves to reveal they are flat, so modelled terrain would buy
+a normal budget and a lighting decision for an identical silhouette.
+
 Not done, and the obvious next steps:
 
+- **Circuit-trace clouds.** The site header has them; the scene does not. The
+  most art-directed element left and the hardest to do procedurally.
 - **The round/chain/phase strip.** The last unstyled region. `--font-display`
   and `--font-label` exist now, so it has faces to be styled with.
 - **Per-enemy-turn granularity.** `advance` resolves every enemy turn in one
