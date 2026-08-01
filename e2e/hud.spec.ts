@@ -1089,6 +1089,75 @@ test.describe('floating combat numbers', () => {
     );
   });
 
+  test('gives each effect its own colour', async ({ page }) => {
+    /* Two battles, because one turn cannot produce a damage, a critical and
+       a heal. Seed 1337 opens with an ordinary hit; seed 7 crits. */
+    await ready(page, '&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+    const damage = await page
+      .getByTestId('damage-number')
+      .first()
+      .evaluate((el) => getComputedStyle(el).color);
+
+    await openBattle(page, 'seed=7&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+    const critical = await page
+      .getByTestId('damage-number')
+      .first()
+      .evaluate((el) => getComputedStyle(el).color);
+
+    /* Compared to each other rather than to hex literals. The point is that a
+       player can TELL THEM APART; which exact red is a design decision that
+       should be free to move without editing a test. */
+    expect(critical, 'critical vs ordinary damage').not.toBe(damage);
+  });
+
+  test('numbers and status words use different typefaces', async ({ page }) => {
+    await ready(page, '&stepMs=0&floatMs=60000');
+    await takeTurn(page);
+
+    const number = await page
+      .getByTestId('damage-number')
+      .first()
+      .evaluate((el) => getComputedStyle(el).fontFamily);
+
+    /* A number is a number and a buff is a word. The families carry that
+       distinction; colour carries which effect it is. */
+    expect(number, 'numbers use the display face').toContain('Orbitron');
+
+    /* DEFEND applies DEF_UP to the actor, which is the cheapest status to
+       reach from the opening menu. */
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await idle(page);
+
+    const status = page.getByTestId('status-popup').first();
+    await expect(status).toHaveText('DEF_UP');
+    const label = await status.evaluate((el) => getComputedStyle(el).fontFamily);
+    expect(label, 'status words use the label face').toContain('Rajdhani');
+  });
+
+  test('the display faces actually loaded', async ({ page }) => {
+    await ready(page, '&stepMs=0&floatMs=60000');
+
+    /* THE ASSERTION THAT CATCHES A SILENT FALLBACK. Every other test here
+       passes against the monospace fallback -- the elements exist, the
+       colours apply, the boxes measure. Only this one notices that the font
+       never arrived, and metrics are what the clearance test depends on.
+       main.ts holds `ready` until document.fonts.ready for the same reason. */
+    const loaded = await page.evaluate(async () => {
+      await document.fonts.ready;
+      return {
+        display: document.fonts.check('900 2rem Orbitron'),
+        label: document.fonts.check('700 1rem Rajdhani'),
+      };
+    });
+
+    expect(loaded.display, 'Orbitron 900').toBe(true);
+    expect(loaded.label, 'Rajdhani 700').toBe(true);
+  });
+
   test('removes itself from the DOM, leaving no orphans', async ({ page }) => {
     /* THE REAL DURATION. Every other test here holds the numbers open, which
        is exactly the condition under which a cleanup bug hides. */

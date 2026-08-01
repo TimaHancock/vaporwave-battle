@@ -10,8 +10,9 @@
  * cards, turn-order bar, damage numbers) is Phase 4. What exists here is
  * only enough to prove the DOM-over-canvas architecture works.
  *
- * The display typeface is an open Phase 4 decision, deliberately not made
- * here -- it should be chosen against real character art, not guessed at.
+ * The display typeface was left open until there was real character art to
+ * judge it against, which was the right condition -- it is settled now, as
+ * --font-display and --font-label below.
  */
 
 :root {
@@ -33,10 +34,61 @@
      use it as a fill or a broad surface. */
   --signal: #22e0ff;
 
+  /* ---------------------------------------------------------------- */
+  /* EFFECT PALETTE -- a scoped exception to the rule above.           */
+  /* ---------------------------------------------------------------- */
+  /*
+   * These are CHOSEN, not sampled, which everywhere else in this file is
+   * forbidden. The rule exists so the game does not read as a different brand
+   * when it sits beside the site, and that reasoning holds for every surface,
+   * rule, fill and gauge. It does not hold for a number that is on screen for
+   * 900ms and has to be understood instantly: red hurts, green heals, blue
+   * defends, yellow hastens is a language players already speak, and the
+   * brand palette has no vocabulary for it -- magenta, ember and lavender
+   * cannot say "healed" without a legend.
+   *
+   * So the exception is deliberately fenced, and the fence is what keeps it
+   * from becoming a second palette:
+   *
+   *   1. .hud-float ONLY. No surface, border, gauge, rule or text elsewhere
+   *      may reference an --fx-* token.
+   *   2. NOT mirrored into src/scene/battleScene.ts. Nothing in the 3D scene
+   *      is ever these colours.
+   *   3. NOT added to PALETTE in tools/prep_character.py. That table is what
+   *      the character-art adherence check scores against, and adding these
+   *      would make off-brand pixels score as on-brand -- the exact failure
+   *      that check exists to catch.
+   *   4. Cyan is untouched: still a 1px accent, never a fill.
+   *
+   * Every hue is picked at neon saturation so it belongs beside the existing
+   * signal cyan and horizon magenta rather than beside a health potion.
+   */
+  --fx-damage: #ff2d6f;
+  --fx-critical: #ff8a1e;
+  --fx-heal: #3dffb0;
+  --fx-atk: #ff6a3d;
+  --fx-def: #5ab0ff;
+  --fx-haste: #ffe14d;
+
   /* Utility face: tabular figures matter -- HP counters that jitter as
      digits change width look cheap. */
   --font-utility: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas,
     monospace;
+
+  /* Display faces, loaded in src/main.ts via Fontsource (SIL OFL, which is a
+     requirement rather than a preference -- see ART_WORKFLOW.md on this being
+     a commercial asset).
+
+     Two, and the split is numbers versus words rather than one per effect.
+     Orbitron is wide, square and geometric, so its numerals hold up at size
+     over a busy sprite; Rajdhani is condensed, so a status word never reads
+     as the same kind of object as a damage number. Which effect it is comes
+     from colour -- the fonts only separate the two CATEGORIES.
+
+     Both fall back to the utility stack, so a failed font load degrades to
+     legible rather than to invisible. */
+  --font-display: 'Orbitron', var(--font-utility);
+  --font-label: 'Rajdhani', var(--font-utility);
 
   /* Spacing scale */
   --gap-xs: 0.25rem;
@@ -138,9 +190,44 @@
      measures a boss damage number against the bar's box and fails if they
      meet. Same shape of constraint as --card-strip against the party's feet. */
   --float-ms: 900ms;
-  --float-rise: 1.15rem;
-  --float-size: 1.05rem;
-  --float-size-crit: 1.5rem;
+  --float-rise: 1.4rem;
+  --float-size: 2rem;
+  --float-size-crit: 2.6rem;
+  --float-size-heal: 1.75rem;
+  --float-size-status: 1rem;
+
+  /*
+   * How far BELOW the head a float starts.
+   *
+   * The anchor is still headScreenPosition(); this is an offset from it, and
+   * it exists because the numbers got twice as big. The boss's head projects
+   * to y 0.147 and the APOLLYON bar bottoms out near 0.09 -- about 41px at
+   * 720p for the glyphs AND the travel, which a 2.6rem critical rising
+   * 1.4rem overruns on its own. Dropping the start point puts the number
+   * over the character's chest, which is where the genre puts it anyway, and
+   * turns an exact fit into a comfortable one.
+   */
+  --float-drop: 2rem;
+
+  /*
+   * How far the 2nd, 3rd... simultaneous float on one target is fanned off
+   * the first. In REM, so it scales with --float-size -- the offset used to
+   * be a fraction of the viewport and stayed put when the glyphs doubled,
+   * which simply stacked two numbers on top of each other.
+   *
+   * Down and left, and both directions are chosen. Down because numbers
+   * travel UP and the boss has only ~41px of that before the APOLLYON bar,
+   * so fanning upward walks the second number into the bar the first is
+   * carefully clearing. Left because the chain counter hangs down-RIGHT of
+   * the same anchor, and every landed hit produces both.
+   */
+  --float-stack-x: -1.3rem;
+  --float-stack-y: 2.7rem;
+
+  /* Criticals lean. Read inside the rise keyframe rather than set as a
+     `transform` here, because the animation owns that property outright --
+     see the keyframe for the whole arrangement. */
+  --float-skew: 0deg;
 }
 
 * {
@@ -880,16 +967,27 @@ body {
  */
 .hud-float {
   position: absolute;
-  translate: -50% -100%;
+  /* Centre on the anchor, drop clear of the boss bar, then fan by however
+     many floats were already alive on this target. --float-stack is written
+     by the layer, which is the only thing that knows that count. */
+  translate:
+    calc(-50% + var(--float-stack, 0) * var(--float-stack-x))
+    calc(-100% + var(--float-drop) + var(--float-stack, 0) * var(--float-stack-y));
+  font-family: var(--font-display);
   font-size: var(--float-size);
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-weight: 900;
+  letter-spacing: 0.02em;
   line-height: 1;
   white-space: nowrap;
-  color: var(--chrome);
+  color: var(--fx-damage);
   /* A hard dark edge, not a glow. These land over sprites and the platform,
-     both mid-tone, and a bloom alone leaves the glyphs muddy. */
-  text-shadow: 0 2px 4px var(--void-deep), 0 0 10px var(--void-deep);
+     both mid-tone, and a bloom alone leaves the glyphs muddy. The stroke does
+     the separating and the coloured bloom does the character -- at 2rem a
+     shadow alone is not enough contrast against the boss's halo. */
+  -webkit-text-stroke: 3px var(--void-deep);
+  paint-order: stroke fill;
+  text-shadow: 0 2px 6px var(--void-deep),
+    0 0 14px color-mix(in srgb, var(--fx-damage) 55%, transparent);
   /*
    * TWO animations, and the arrival is a FIXED duration rather than a
    * percentage of the whole.
@@ -920,13 +1018,19 @@ body {
  */
 .hud-float[data-kind='critical'] {
   font-size: var(--float-size-crit);
-  color: var(--ember);
-  text-shadow: 0 2px 4px var(--void-deep), 0 0 14px var(--ember-deep);
+  color: var(--fx-critical);
+  /* The lean. Applied through a custom property the rise keyframe reads, so
+     there is still exactly one transform animation on this element. */
+  --float-skew: -6deg;
+  text-shadow: 0 2px 6px var(--void-deep),
+    0 0 20px color-mix(in srgb, var(--fx-critical) 70%, transparent);
 }
 
 .hud-float[data-kind='heal'] {
-  color: var(--chrome);
-  text-shadow: 0 2px 4px var(--void-deep), 0 0 12px var(--signal);
+  font-size: var(--float-size-heal);
+  color: var(--fx-heal);
+  text-shadow: 0 2px 6px var(--void-deep),
+    0 0 14px color-mix(in srgb, var(--fx-heal) 55%, transparent);
 }
 
 /*
@@ -941,27 +1045,51 @@ body {
  * `DEF_UP`. The same rule the card badges follow.
  */
 .hud-float[data-kind='status'] {
-  font-size: 0.8rem;
-  letter-spacing: 0.14em;
+  /* The condensed face, not the number face. A buff landing is a WORD, and
+     the silhouette difference is what stops it reading as a small number. */
+  font-family: var(--font-label);
+  font-size: var(--float-size-status);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  -webkit-text-stroke-width: 2px;
 }
 
 .hud-float[data-kind='status']::before {
-  margin-right: 0.25rem;
+  margin-right: 0.3rem;
+}
+
+/* Glyph AND colour per kind, matching the card badges' glyphs so the pop-up
+   and the badge it produces read as one object seen twice. The colours are
+   the effect palette's, not the badges' -- see the fence at the top of this
+   file for why that divergence is deliberate and where it stops. */
+.hud-float[data-status='ATK_UP'] {
+  color: var(--fx-atk);
+  text-shadow: 0 2px 6px var(--void-deep),
+    0 0 14px color-mix(in srgb, var(--fx-atk) 55%, transparent);
 }
 
 .hud-float[data-status='ATK_UP']::before {
   content: '\25B2';
-  color: var(--ember);
+}
+
+.hud-float[data-status='DEF_UP'] {
+  color: var(--fx-def);
+  text-shadow: 0 2px 6px var(--void-deep),
+    0 0 14px color-mix(in srgb, var(--fx-def) 55%, transparent);
 }
 
 .hud-float[data-status='DEF_UP']::before {
   content: '\25C6';
-  color: var(--chrome);
+}
+
+.hud-float[data-status='HASTE'] {
+  color: var(--fx-haste);
+  text-shadow: 0 2px 6px var(--void-deep),
+    0 0 14px color-mix(in srgb, var(--fx-haste) 55%, transparent);
 }
 
 .hud-float[data-status='HASTE']::before {
   content: '\00BB';
-  color: var(--horizon);
 }
 
 /* The arrival. Fixed length, so it stays a flick however long the number is
@@ -977,16 +1105,26 @@ body {
 
 /* The hold and the departure. Opacity sits at 1 for most of --float-ms so
    the number is legible for nearly all of its life, then goes at the tail. */
+/*
+ * The hold and the departure. Opacity sits at 1 for most of --float-ms so the
+ * number is legible for nearly all of its life, then goes at the tail.
+ *
+ * The skew is INSIDE the keyframe rather than on the element, because an
+ * animation owns `transform` outright for as long as it runs -- a
+ * `transform: skewX()` in the base rule would simply be overwritten here and
+ * criticals would never lean. Reading a custom property instead keeps one
+ * animation for every kind: only the value differs.
+ */
 @keyframes hud-float-rise {
   from {
-    transform: translateY(0);
+    transform: translateY(0) skewX(var(--float-skew));
     opacity: 1;
   }
   70% {
     opacity: 1;
   }
   to {
-    transform: translateY(calc(-1 * var(--float-rise)));
+    transform: translateY(calc(-1 * var(--float-rise))) skewX(var(--float-skew));
     opacity: 0;
   }
 }
@@ -1094,6 +1232,9 @@ body {
    */
   .hud-float {
     animation-name: hud-float-fade;
+    /* hud-float-fade never touches `transform`, so nothing overrides the base
+       property and the critical's lean has to be restated here to survive. */
+    transform: skewX(var(--float-skew));
   }
 
   /* Decorative, and removes nothing. Safe to drop outright. */

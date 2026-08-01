@@ -115,26 +115,20 @@ export function floatTargetOf(event: BattleEvent): string | null {
 export const CHAIN_VISIBLE_FROM = 2;
 
 /**
- * How far apart two floats sharing one anchor are pushed, as a fraction of
- * the viewport.
+ * The fan offset lives in CSS, not here.
  *
- * DOWN AND LEFT, and both directions are chosen rather than arbitrary.
- *
- * Down, because the anchor is a head and numbers travel UP from it -- for the
- * boss there is only about 41px of that before the APOLLYON bar, so fanning
- * the second number upward walks it into the bar the first one is carefully
- * clearing.
- *
- * Left, because the chain counter hangs down-RIGHT of the same anchor. Every
- * landed hit both spawns a number and bumps the chain, so those two are on
- * screen together constantly; sharing a column means the second number spends
- * its life behind the counter.
+ * It used to be a fraction of the viewport added to the anchor, which was
+ * quietly wrong: the offset was in viewport units and the glyphs are in rem,
+ * so doubling the font size did not widen the gap and two numbers on one
+ * target overlapped. Publishing the index and letting the stylesheet multiply
+ * it by a rem step keeps the spacing in the same units as the thing being
+ * spaced -- change --float-size and the fan follows.
  *
  * Deterministic from a count rather than jittered: `Math.random()` is banned
  * project-wide, and a random offset would also move the numbers between two
  * runs of one seed and break the screenshot baseline.
  */
-const STACK_STEP = { x: -0.02, y: 0.03 };
+const STACK_PROPERTY = '--float-stack';
 
 /**
  * The short fade-in, by keyframe name. Must match `@keyframes hud-float-in`
@@ -247,12 +241,11 @@ export function createFloatLayer(root: HTMLElement, durationMs: number): FloatLa
       if (shown.status !== undefined) node.dataset['status'] = shown.status;
       node.textContent = shown.text;
 
-      /* Fanned down and across, so overlapping numbers on one target read as
-         two numbers rather than one bolder one. */
-      place(node, {
-        x: at.x + index * STACK_STEP.x,
-        y: at.y + index * STACK_STEP.y,
-      });
+      /* The anchor is exactly the target's head; the stylesheet fans the
+         second and later numbers off it so overlapping floats on one target
+         read as two numbers rather than one bolder one. */
+      place(node, at);
+      node.style.setProperty(STACK_PROPERTY, String(index));
 
       el.append(node);
       live.add(node);

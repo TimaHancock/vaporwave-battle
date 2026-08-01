@@ -35,6 +35,24 @@ characters, DOM interface. One arena, one boss, one locked camera.
 - **Palette is sampled from the site design, not chosen.** The dark ground is
   warm plum (R > B), not cool indigo. Cyan is a thin line accent only -- it
   is absent from the site's dominant colours.
+- **One scoped exception: the `--fx-*` effect palette.** Damage red, heal
+  green, defend blue, haste yellow are *chosen*, because a number on screen
+  for 900ms has to be understood instantly and the brand palette has no
+  vocabulary for "healed". The fence is what keeps it from becoming a second
+  palette: `.hud-float` **only** -- no surface, border, gauge or rule may
+  reference one -- and it is mirrored into **neither** `battleScene.ts` nor
+  `PALETTE` in `tools/prep_character.py`. That second one matters: that table
+  is what the character-art adherence check scores against, so adding these
+  would make off-brand pixels score as on-brand, the exact failure the check
+  exists to catch. Card status badges keep the brand colours; the pop-up and
+  the badge are tied by a shared glyph, not a shared hue, because one is an
+  event and the other is state.
+- **Display typeface: decided.** Orbitron (numbers) and Rajdhani (status
+  words), latin subsets via Fontsource, in `--font-display` / `--font-label`.
+  The split is numbers-versus-words, not one face per effect -- which effect
+  it is comes from colour. **Both are SIL OFL, and that is a requirement:**
+  ART_WORKFLOW.md records this as a commercial asset, so anything bundled
+  must permit commercial use. Check the licence before swapping either.
 - **No `Math.random()`.** Use `createRng()` from `src/rng.ts` only.
 - **Every GPU resource goes in the `DisposalRegistry`.** Geometries,
   materials and textures leak otherwise, and this game restarts battles.
@@ -346,10 +364,27 @@ to, plus the chain counter over the boss. What it rests on:
   `animationend`, so `animation: none` means every number ever spawned stays
   in the DOM forever. The fade and the duration stay; only the travel goes.
   This is the one entry in that media block where `none` would be a bug.
-- **`--float-rise` is bounded by the boss bar.** The boss's head projects to
-  y 0.147 with the APOLLYON bar bottoming out near 0.09 — about 41px for the
-  glyphs *and* the travel. The e2e test seeks the animation to 99% and
-  measures there, because a resting box that clears the bar proves nothing.
+- **`--float-rise` + `--float-drop` are bounded by the boss bar.** The boss's
+  head projects to y 0.147 with the APOLLYON bar bottoming out near 0.09 —
+  about 41px for the glyphs *and* the travel, which a 2.6rem critical
+  overruns on its own. `--float-drop` starts the number below the head, over
+  the chest, which is where the genre puts it anyway. The e2e test seeks the
+  animation to 99% and measures there, because a resting box that clears the
+  bar proves nothing.
+- **Spacing is in the same units as the thing being spaced.** The fan offset
+  for a second float on one target is `--float-stack-*` in **rem**, published
+  as an index from the layer. It was once a fraction of the viewport added to
+  the anchor, which silently stopped working when the glyphs doubled in size
+  — the offset did not scale and two numbers landed on top of each other.
+- **Web fonts must be `load()`ed, not merely awaited.** A browser fetches a
+  face only when something on screen uses one, and at boot nothing does — so
+  `document.fonts.ready` alone resolves instantly with nothing pending, and
+  the first damage number renders in the fallback and reflows. `main.ts`
+  calls `document.fonts.load()` for each face in `DISPLAY_FACES` first. That
+  matters because the clearance test and every shot *measure*, and Orbitron's
+  metrics are nothing like the monospace fallback's. `e2e/dist.spec.ts`
+  asserts `document.fonts.check(...)` for the same reason: every other test
+  passes happily against the fallback.
 - **Numbers fan down-left; the chain counter hangs down-right.** Every landed
   hit spawns a number *and* bumps the chain, so those two share the screen
   almost permanently — in one column, one of them is always hidden. The fan is
@@ -359,8 +394,8 @@ to, plus the chain counter over the boss. What it rests on:
 
 Not done, and the obvious next steps:
 
-- **The round/chain/phase strip.** The last unstyled region. The display
-  typeface is still an open decision.
+- **The round/chain/phase strip.** The last unstyled region. `--font-display`
+  and `--font-label` exist now, so it has faces to be styled with.
 - **Per-enemy-turn granularity.** `advance` resolves every enemy turn in one
   call, so a boss turn narrates beat by beat but its HP change lands in a
   single commit. Splitting it needs a new entry point in `battle.ts`.

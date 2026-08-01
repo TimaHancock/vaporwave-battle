@@ -105,12 +105,13 @@ export const SHOTS = [
     name: 'damage_numbers',
     description:
       'One turn resolved, with the floating numbers held open. The questions ' +
-      'no assertion can answer -- does a number read as BELONGING to the ' +
-      'character it hangs over, or as HUD text that happens to be nearby? ' +
-      'Is a critical distinguishable at a glance rather than on inspection? ' +
-      'Are the glyphs legible against the sprite behind them, and does the ' +
-      'chain counter sit clear of both the boss bar above it and the ' +
-      'numbers rising past it?',
+      'no assertion can answer -- is a number now unmistakably an EVENT ' +
+      'rather than HUD text that happens to be nearby? Does Orbitron hold up ' +
+      'at 2rem over the boss\'s halo, or does the dark stroke eat the ' +
+      'counters? Does the red read as damage without reading as a different ' +
+      'brand from the site? Is the critical\'s lean impact or is it just ' +
+      'harder to read? And does the chain counter still sit clear of both ' +
+      'the boss bar above it and the numbers rising past it?',
     seed: 7,
     time: 1.0,
     /* seed 7 crits on the opening turn, so the shot shows an ordinary hit
@@ -129,6 +130,27 @@ export const SHOTS = [
     settle: true,
     scale: 2,
     clip: { x: 0.45, y: 0, width: 0.55, height: 0.6 },
+  },
+  {
+    name: 'status_popup',
+    description:
+      'DEFEND resolved, so a DEF_UP pop-up floats over KIRA while the badge ' +
+      'it produced sits on her card below. The questions -- do the pop-up ' +
+      'and the card badge read as ONE event seen twice, given they share a ' +
+      'glyph but deliberately not a colour? Does the condensed label face ' +
+      'separate a buff from a damage number at a glance? And is the blue ' +
+      'distinguishable from the interface\'s cyan rules rather than ' +
+      'blending into them?',
+    seed: 1337,
+    time: 1.0,
+    /* Down twice to DEFEND, Enter to commit. The only status a party member
+       can apply to themselves from the opening menu, so it needs no skill
+       navigation and stays legible as a test of the status path. */
+    query: 'stepMs=0&floatMs=60000',
+    keys: ['ArrowDown', 'ArrowDown', 'Enter'],
+    settle: true,
+    scale: 2,
+    clip: { x: 0, y: 0.25, width: 0.45, height: 0.75 },
   },
   {
     name: 'action_log',

@@ -21,6 +21,27 @@
  * that flag, so it must not go true before the sprites exist.
  */
 
+/*
+ * The display faces, self-hosted through Fontsource.
+ *
+ * LATIN SUBSETS, not the full families: Orbitron ships cyrillic and Rajdhani
+ * ships devanagari, and neither appears in this game. The subset files are a
+ * fraction of the size for identical output.
+ *
+ * Imported here rather than @import-ed from style.css so Vite resolves the
+ * bare specifier unambiguously and fingerprints the woff2 into /assets/ --
+ * which also means a font path cannot repeat the relative-URL bug the
+ * portraits shipped with.
+ *
+ * Both are SIL Open Font License. That is a requirement rather than a
+ * preference here: ART_WORKFLOW.md records that this game is attached to a
+ * commercial site, so anything bundled has to permit commercial use and
+ * embedding. Check the licence before swapping either one.
+ */
+import '@fontsource/orbitron/latin-600.css';
+import '@fontsource/orbitron/latin-900.css';
+import '@fontsource/rajdhani/latin-700.css';
+
 import './style.css';
 import * as THREE from 'three';
 import { createBattleScene, CAMERA } from './scene/battleScene';
@@ -114,6 +135,21 @@ function nonNegativeParam(raw: string | null): number | undefined {
    Who they are, how tall they are and which PNG they are all live in
    scene/cast.ts, which mirrors public/characters/CHARACTER_PROMPTS.md. */
 const PARTY_NAMES = PARTY.map((member) => member.name);
+
+/**
+ * The display faces to have in hand before the scene calls itself ready.
+ *
+ * CSS font shorthand, which is what `FontFaceSet.load` takes. These must stay
+ * in step with the `@fontsource/*` imports at the top of this file and with
+ * `--font-display` / `--font-label` in style.css: a weight named here that is
+ * not imported never resolves, and a weight used in CSS but missing here goes
+ * back to loading lazily and reflowing on first use.
+ */
+const DISPLAY_FACES = [
+  '900 2rem Orbitron',
+  '600 2rem Orbitron',
+  '700 1rem Rajdhani',
+];
 
 /* ---------------------------------------------------------------- */
 /* Bootstrap                                                         */
@@ -466,6 +502,44 @@ async function main(
      anchor to. Nothing was missed -- the log is empty at boot -- but the
      chain counter needs a position it could not have been given then. */
   refresh();
+
+  /* --- Fonts ------------------------------------------------------ */
+
+  /*
+   * Wait for the display faces before anything is allowed to call itself
+   * ready.
+   *
+   * Fontsource ships `font-display: swap`, so text paints in the fallback
+   * stack and re-lays out when the real face arrives. Everything downstream
+   * of `ready` measures: the screenshot harness photographs it, and
+   * e2e/hud.spec.ts asserts a damage number's risen box clears the boss bar.
+   * Orbitron's metrics are nothing like a monospace fallback's, so allowing
+   * ready to fire first means those measurements are of a layout that never
+   * ships -- and only on a cold cache, which is the worst kind of flake.
+   *
+   * `load()` BEFORE `ready`, and that ordering is the whole point. A browser
+   * fetches a web font only when something on screen actually uses it, and at
+   * this moment nothing does -- the first damage number is several keypresses
+   * away. So `ready` on its own resolves instantly with nothing pending, the
+   * harness proceeds, and the first number to appear is the one that renders
+   * in the fallback and then reflows. Asking for the faces explicitly is what
+   * turns "no loads are pending" into "the faces are here".
+   *
+   * Guarded because `document.fonts` is absent in some environments, and a
+   * missing Font Loading API should degrade to unstyled text rather than to
+   * a bootstrap that never finishes.
+   */
+  if (document.fonts !== undefined) {
+    await Promise.all(
+      DISPLAY_FACES.map((face) =>
+        /* A failed font is a cosmetic problem, not a fatal one -- the stacks
+           in style.css fall back to the utility face. Swallow it here so a
+           font 404 cannot take the whole bootstrap down with it. */
+        document.fonts.load(face).catch(() => undefined),
+      ),
+    );
+    await document.fonts.ready;
+  }
 
   /* --- Go --------------------------------------------------------- */
 

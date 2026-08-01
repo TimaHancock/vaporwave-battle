@@ -113,6 +113,32 @@ test.describe('the built output', () => {
     }
   });
 
+  test('the bundled fonts resolve and load', async ({ page }) => {
+    await ready(page);
+
+    /* Fonts are a new class of asset reached from CSS, which is exactly the
+       shape of the portrait bug this suite was written for -- except Vite
+       fingerprints these into /assets/ and rewrites the @font-face url
+       itself, so the failure mode is a bad build rather than a bad path.
+       Either way the symptom is identical and silent: everything renders,
+       in the wrong typeface, at the wrong metrics. */
+    const loaded = await page.evaluate(async () => {
+      await document.fonts.ready;
+      return {
+        display: document.fonts.check('900 2rem Orbitron'),
+        label: document.fonts.check('700 1rem Rajdhani'),
+        faces: [...document.fonts].map((face) => `${face.family} ${face.weight}`),
+      };
+    });
+
+    expect(loaded.display, `Orbitron 900 (have: ${loaded.faces.join(', ')})`).toBe(
+      true,
+    );
+    expect(loaded.label, `Rajdhani 700 (have: ${loaded.faces.join(', ')})`).toBe(
+      true,
+    );
+  });
+
   test('the scene textures decoded', async ({ page }) => {
     await ready(page);
     await page.waitForFunction(() => window.__debugState?.ready === true);
