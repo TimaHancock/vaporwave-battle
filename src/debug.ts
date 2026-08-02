@@ -51,17 +51,13 @@ export interface DebugState {
    * 0 forever. A screenshot can show it; nothing else can, and "a hit throws
    * debris, and reduced motion throws none" is worth being able to say.
    *
-   * The shake is the mirror image: it runs on real timers, so an assertion CAN
-   * watch it start and finish, but nothing about it is visible in the DOM or
-   * the state. The counter is the only durable trace either one leaves.
+   * The counter is the only durable trace a burst leaves.
    */
   effects: {
     /** Shard bursts fired since boot. */
     bursts: number;
     /** Shards currently in the air. Recomputed on each rendered frame. */
     shardsAlive: number;
-    /** Screen shakes started since boot. */
-    shakes: number;
     /**
      * Frame washes started since boot -- one per commit that landed a
      * critical.

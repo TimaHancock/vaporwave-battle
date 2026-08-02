@@ -24,15 +24,13 @@ characters, DOM interface. One arena, one boss, one locked camera.
 - **Renderer:** `WebGLRenderer`. Do not migrate to WebGPU.
 - **Camera is locked:** position `(0, 3.2, 11)`, target `(0, 1.6, 0)`,
   fov `32`, perspective. Do not change without explicit instruction.
-  **Screen shake moves the CANVAS, not the camera**, and that is the rule
-  rather than a shortcut: four things read the projection — `headScreenPosition`
-  for float anchors, `__debugState.sprites[].headScreen`, the composition
-  assertions, and the `--log-height` / `--card-strip` bounds — so a moving
-  camera would de-anchor every damage number and invalidate all of them at
-  once. A CSS transform on `#stage` leaves every one meaning what it meant.
-  **`#hud` and `#floats` do not shake.** The interface is the frame the game
-  is seen through, and the frame does not move; it also keeps a 7px
-  displacement out of the float-clearance measurements.
+  **A screen shake was built and then removed** — it did not feel right in
+  play, which is the one verdict no channel here can return. It never moved
+  the camera, and if it ever comes back it must not: four things read the
+  projection — `headScreenPosition` for float anchors,
+  `__debugState.sprites[].headScreen`, the composition assertions, and the
+  `--log-height` / `--card-strip` bounds — so a moving camera de-anchors every
+  damage number and invalidates all of them at once.
 - **Key light is a contract:** front-left, `(-4, 6, 6)`, ~40 deg elevation.
   Sprites use `MeshBasicMaterial`, so scene lights never touch them --
   lighting is painted into the art. That agreement is authoring discipline,
@@ -136,7 +134,6 @@ earning its place in `dist.spec.ts`.
 | `?bossHp=` | Override boss max HP **and** HP. For the victory e2e test. |
 | `?floatMs=` | How long a damage number lives. Default 900. |
 | `?hitStop=` | Freeze on a landed hit, ms. Default 70, **0 under `?time=`**; 0 disables. |
-| `?shake=` | Screen-shake amplitude, % of the shipped value. Default 100; 0 disables. |
 | `?fxTime=` | **Step mode only.** Redraw at this simulated time after an action, instead of `?time=`. |
 
 `?floatMs=` exists so the effect can be photographed at all: a number is gone
@@ -152,9 +149,6 @@ steps to 1.0, acts, and draws the burst at age 0.15. **The extra redraw happens
 only when the parameter is present**, so the e2e suite pays nothing; an
 unconditional software render behind every hit is what took the suite from 1.3
 minutes to 5.4 once already.
-
-`?shake=` is **on by default in step mode**, unlike `?hitStop=`, and the
-difference is not an inconsistency — see the clock note in the traps below.
 
 `?bossHp=` shortens the boss rather than the pauses, so the e2e victory run
 still exercises real turn timing. The two lock tests go the other way and
@@ -409,11 +403,11 @@ on a legitimately unlocked battle.
   settle is now guessing; wait on `getAnimations()` reaching `finished`
   instead. One test had to change for this and it was the right change
   anyway.
-- **Reduced motion switches hit-stop, the recoil, the shake and the shard
-  burst OFF, and that is safe** — the opposite of the float layer, where
-  `animation: none` would be a bug because removal rides on `animationend`.
-  Nothing in hit-stop waits on an animation to finish. The SPRITE flash stays:
-  a colour changing in place is not what anybody means by motion.
+- **Reduced motion switches hit-stop, the recoil and the shard burst OFF, and
+  that is safe** — the opposite of the float layer, where `animation: none`
+  would be a bug because removal rides on `animationend`. Nothing in hit-stop
+  waits on an animation to finish. The SPRITE flash stays: a colour changing
+  in place is not what anybody means by motion.
 - **The FRAME wash goes off under reduced motion though, and it is the one
   place that rule is the wrong test.** By the module's own argument a wash is
   not motion — it is a colour changing in place, like the sprite flash. But a
@@ -425,32 +419,15 @@ on a legitimately unlocked battle.
   and the shard burst are functions of age against the SCENE clock: hit-stop
   freezes them for free and `?time=` photographs them, but they are inert
   under e2e, which halts that clock — so they are asserted through counters in
-  `__debugState.effects`, never by watching them. The screen shake and the
-  frame wash are Web Animations on real timers: unphotographable, and the only
-  two an assertion can watch start and *finish*. Neither could be moved to the
-  other clock without losing the thing it is there for.
-- **That is also why `?shake=` is on by default in step mode and `?hitStop=`
-  is not.** Hit-stop on a halted clock is half an effect freezing an interface
-  nobody is animating. A shake runs, finishes, and moves only the canvas —
-  which nothing in the suite measures. There is nothing to switch off.
-- **A shake must end at EXACTLY rest, and nothing would tell you if it did
-  not.** The last keyframe becomes the resting style, so a walk that decays to
-  0.3px leaves the whole composition permanently off its mark — the DOM is
-  right, the state is right, and every frame afterwards is shifted. Asserted
-  in `impact.test.ts` (the final step is exactly zero) and in `e2e/hud.spec.ts`
-  (the canvas's computed transform returns to `none`).
-- **The shake's micro-zoom is load-bearing, not decoration.** `#stage` is
-  `position: fixed; inset: 0`, so it IS the viewport — translate it and a
-  strip of page background shows along one edge, which is a black band
-  flickering at the frame edge for a fifth of a second and reads as a
-  rendering fault. Each step carries the smallest scale that covers its own
-  displacement (`1 + 2·offset/extent`, doubled because moving by `x` uncovers
-  `x` on one side). It is good juice as well; that is a bonus, not the reason.
+  `__debugState.effects`, never by watching them. The frame wash is a Web
+  Animation on real timers: barely photographable, and the only one an
+  assertion can watch start and *finish*. Neither could be moved to the other
+  clock without losing the thing it is there for.
 - **A freeze must not resume an animation it did not still own.** `play()` on
   a CANCELLED animation restarts it from zero, and two things cancel mid-
-  freeze: a float removed by its own timer, and a second hit, which REPLACES
-  the canvas shake rather than layering onto it. Resuming the second
-  resurrects a shake that was deliberately thrown away, on top of the one that
+  freeze: a float removed by its own timer, and a second critical, which
+  REPLACES the frame wash rather than deepening it. Resuming the second
+  resurrects a wash that was deliberately thrown away, on top of the one that
   replaced it. `release()` skips anything no longer `paused`.
 - **The frame wash peaks on its FIRST frame, and that is because of hit-stop.**
   Ramping in over the opening fifth is the obvious shape and the wrong one: the
@@ -490,11 +467,6 @@ on a legitimately unlocked battle.
   now; a shot whose subject is motion sets `reducedMotion: 'no-preference'`.
   Worth remembering the shape of this: a harness setting chosen for one
   channel silently disabled a feature in another.
-- **The shot harness waits for `#stage` to stop animating before capturing.**
-  A capture taken mid-shake is a displaced and slightly zoomed crop of the
-  composition, differently on every run depending on which keyframe the round
-  trip landed on. One wait rather than `shake=0` through the manifest, because
-  it is true of every shot and a property of none of them.
 - Azure free tier caps the site at 250 MB. Compress textures (KTX2) and
   meshes (Draco). Check bundle size when adding assets.
 
@@ -728,29 +700,35 @@ true*: `?fxTime=` renders a stepped frame at an age of your choosing, which is
 what makes the shard burst photographable. The ring's other arguments stand,
 but it is no longer refused on this one.
 
-**Blows land now, and the frame reacts to them.** `scene/impact.ts` is the pure
-module for how much: hit-stop duration and shake amplitude from a commit's
-events, the recoil and flash curves, the shake's decaying walk, and which way a
-blow throws its target. `scene/burst.ts` is the shard field's maths.
-`sprite.ts` owns the reaction, `battleScene.ts` owns the pooled `InstancedMesh`
-every burst draws through, `ui/screenEffects.ts` owns the shake and the wash,
-and `main.ts` owns the freeze. All of it is fired from **one `view.log` diff**
-— the same one that spawns the damage numbers — so the flinch, the debris, the
-kick, the wash and the number cannot disagree about what landed.
+**Blows land now.** `scene/impact.ts` is the pure module for how much: hit-stop
+duration from a commit's events, the recoil and flash curves, how much debris a
+blow throws, and which way it throws it. `scene/burst.ts` is the shard field's
+maths. `sprite.ts` owns the reaction, `battleScene.ts` owns the pooled
+`InstancedMesh` every burst draws through, `ui/screenEffects.ts` owns the
+critical's frame wash, and `main.ts` owns the freeze. All of it is fired from
+**one `view.log` diff** — the same one that spawns the damage numbers — so the
+flinch, the debris, the wash and the number cannot disagree about what landed.
 
-Five things happen on a hit, and each answers a different question:
+Four things happen on a hit, and each answers a different question:
 
 | | What it says |
 |---|---|
 | **Hit-stop** | the blow had weight |
 | **Sprite flash** | *this* character was hit |
 | **Recoil** | it was hit from *that* direction |
-| **Shard burst** | something came off it |
-| **Screen shake** | and it was hard enough to move the frame |
+| **Shard burst** | and something came off it |
 
 A critical differs in **kind**, not only in degree: it freezes twice as long,
-kicks twice as hard, throws twice the debris, comes off ember rather than
-magenta, *and* washes the frame — which nothing else does.
+throws twice the debris, comes off ember rather than magenta, *and* washes the
+frame — which nothing else does.
+
+**A screen shake was the fifth and is gone.** It was built, bounded, tested and
+removed, because it did not feel right in play — the one verdict none of the
+four channels can return, and the only one that settles a question like this.
+Worth knowing it was tried, and worth knowing what made it awkward beyond
+taste: the canvas is `position: fixed; inset: 0`, so any displacement exposes
+page background at the frame edge and has to be paid for with a zoom, and a
+zoom under a locked camera is a second camera move nobody asked for.
 
 Facts worth knowing before changing any of it:
 
@@ -779,9 +757,8 @@ Facts worth knowing before changing any of it:
   cannot reach the scene, where the character-art adherence check would then
   score them as on-brand.
 
-Two numbers here no channel can judge, and both are cheap to try: `HIT_STOP_MS`
-(70ms is either impact or a dropped frame) via `?hitStop=`, and the shake
-amplitude via `?shake=`.
+One number here no channel can judge, and it is cheap to try: `HIT_STOP_MS`
+(70ms is either impact or a dropped frame) via `?hitStop=`.
 
 Not done, and the obvious next steps:
 

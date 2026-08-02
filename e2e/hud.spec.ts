@@ -56,28 +56,6 @@ function effects(page: Page) {
   return page.evaluate(() => window.__debugState!.effects);
 }
 
-/** Play states of whatever is animating the canvas. Empty when it is at rest. */
-function stageAnimations(page: Page): Promise<string[]> {
-  return page.evaluate(() =>
-    Array.from(document.querySelector('#stage')?.getAnimations() ?? []).map(
-      (animation) => animation.playState,
-    ),
-  );
-}
-
-/**
- * The canvas's computed transform.
- *
- * `none` is the resting value, and the shake does not fill -- so this reading
- * anything else once every animation is done means the frame has been left off
- * its mark, which is the failure no other channel can see.
- */
-function stageTransform(page: Page): Promise<string> {
-  return page.evaluate(
-    () => getComputedStyle(document.querySelector('#stage')!).transform,
-  );
-}
-
 /** `rgb(...)` / `rgba(...)` as channels. Computed colours are always one of these. */
 function channels(colour: string): { r: number; g: number; b: number } {
   const [r = 0, g = 0, b = 0] = (colour.match(/[\d.]+/g) ?? []).map(Number);
@@ -1198,20 +1176,41 @@ test.describe('floating combat numbers', () => {
   });
 
   test('removes itself from the DOM, leaving no orphans', async ({ page }) => {
-    /* THE REAL DURATION. Every other test here holds the numbers open, which
-       is exactly the condition under which a cleanup bug hides. */
-    await ready(page, '&stepMs=0');
+    /* A REAL DURATION, three seconds rather than the shipped 900ms or the
+       60000ms every other test here uses.
 
-    await takeTurn(page);
+       60000 is what hides a cleanup bug: removal never has to happen inside
+       the test. 900 is what made this test a coin flip -- under a saturated
+       parallel run the browser is starved enough that Playwright's polls land
+       roughly 800ms apart, so a 900ms element can appear and be gone between
+       two of them without ever being seen. That is not fixable by reordering
+       the assertions; the window simply has to be wider than the poll
+       interval. Three seconds is still removal happening on its own timer
+       with no interaction, which is the entire subject. */
+    /* `openBattle` rather than `ready`, because it also waits for
+       `__debugState.ready === true`. `ready()` returns as soon as
+       `__debugState.battle` exists, which `refresh()` publishes BEFORE the
+       character textures load -- and `emitFloats` DROPS any float whose target
+       has no sprite to anchor to, so a keypress that beat the texture load
+       resolves a real turn, moves the boss's HP, and produces no number at
+       all. Not what was failing here, but a real second race and free to
+       close. */
+    await openBattle(page, 'seed=1337&stepMs=0&floatMs=3000');
+
+    /* Asserted WITHOUT waiting for the turn to settle first: `idle()` costs a
+       browser round trip, and there is no reason to spend part of the window
+       on one. */
+    await page.keyboard.press('Enter');
     await expect(floats(page)).not.toHaveCount(0);
+    await idle(page);
 
     /* Back to nothing on its own, with no further interaction. */
-    await expect(floats(page)).toHaveCount(0, { timeout: 5_000 });
+    await expect(floats(page)).toHaveCount(0, { timeout: 10_000 });
 
     /* And still nothing after several more turns — a leak that drops one
        element per turn passes a single-turn check. */
     for (let turn = 0; turn < 3; turn++) await takeTurn(page);
-    await expect(floats(page)).toHaveCount(0, { timeout: 5_000 });
+    await expect(floats(page)).toHaveCount(0, { timeout: 10_000 });
   });
 
   test.describe('hit-stop', () => {
@@ -1223,12 +1222,12 @@ test.describe('floating combat numbers', () => {
      * pulse, two floats" does not.
      */
     async function pausedNames(page: Page): Promise<string[]> {
-      /* All four effect roots, matching the walk in main.ts's `freeze`. The
-         canvas and the wash are on that list because the shake and the frame
-         flash are Web Animations rather than scene-clock effects -- a freeze
-         has to hold them too, and a release has to let them go. */
+      /* All three effect roots, matching the walk in main.ts's `freeze`. The
+         wash is on that list because it is a Web Animation rather than a
+         scene-clock effect -- a freeze has to hold it too, and a release has
+         to let it go. */
       return page.evaluate(() =>
-        ['#stage', '#flash', '#hud', '#floats']
+        ['#flash', '#hud', '#floats']
           .flatMap((selector) =>
             Array.from(
               document.querySelector(selector)?.getAnimations({ subtree: true }) ?? [],
@@ -1317,31 +1316,6 @@ test.describe('floating combat numbers', () => {
       expect(await pausedNames(page)).toEqual([]);
     });
 
-    test('holds the screen shake too, and lets that go as well', async ({ page }) => {
-      /* The shake is a canvas transform rather than a scene-clock effect, so
-         the freeze reaches it only because main.ts lists the canvas among its
-         effect roots. Getting that wrong in the pausing direction is a shake
-         that runs THROUGH the stop -- the frame moving while the game is
-         meant to be stopped dead. Getting it wrong in the releasing direction
-         leaves the whole scene permanently off its mark, which nothing else
-         here would catch: the DOM is right, the state is right, and the
-         canvas is simply thirteen pixels to the left forever. */
-      await ready(page, '&stepMs=0&hitStop=2000');
-
-      await page.keyboard.press('Enter');
-      await expect
-        .poll(() => stageAnimations(page).then((states) => states), {
-          timeout: 5_000,
-        })
-        .toContain('paused');
-
-      await idle(page);
-      await expect
-        .poll(() => stageAnimations(page), { timeout: 8_000 })
-        .not.toContain('paused');
-      await expect.poll(() => stageTransform(page), { timeout: 8_000 }).toBe('none');
-    });
-
     test('does not freeze at all when reduced motion is requested', async ({
       page,
     }) => {
@@ -1361,60 +1335,29 @@ test.describe('floating combat numbers', () => {
     });
   });
 
-  test.describe('screen shake and the frame wash', () => {
+  test.describe('debris and the frame wash', () => {
     /**
-     * The two impact effects a test can actually watch.
+     * The two halves of the impact layer this file can reach, and they are
+     * reached differently.
      *
      * The recoil, the sprite flash and the shard burst are all functions of
      * age against the SCENE clock, and `?time=0` -- which every spec in this
      * file loads with -- halts that clock. They are frozen at age 0 here by
-     * design. These two are Web Animations on real timers, so they run
-     * normally under step mode, which makes them the only part of the impact
-     * layer whose START and, far more importantly, whose END is assertable.
+     * design, so the burst is asserted through a COUNTER rather than by
+     * watching it. The frame wash is a Web Animation on real timers, so it
+     * runs normally under step mode and can be watched properly.
      */
 
-    test('kicks the frame when a blow lands', async ({ page }) => {
+    test('throws debris off the character a blow lands on', async ({ page }) => {
       await ready(page, '&stepMs=0');
-      expect(await effects(page)).toMatchObject({ shakes: 0, bursts: 0 });
+      expect((await effects(page)).bursts, 'nothing has landed yet').toBe(0);
 
       await takeTurn(page);
 
-      const after = await effects(page);
-      expect(after.shakes, 'the frame kicked').toBeGreaterThan(0);
-      expect(after.bursts, 'and threw debris').toBeGreaterThan(0);
+      expect((await effects(page)).bursts, 'the hit threw debris').toBeGreaterThan(0);
     });
 
-    test('ALWAYS settles back to rest', async ({ page }) => {
-      /* THE ONE THAT MATTERS, and the same argument as hit-stop's release. A
-         shake that fails to end leaves the canvas permanently translated and
-         zoomed -- and every other channel stays green while it happens,
-         because the DOM is correct, the state is correct, and the composition
-         has simply moved. `shakeOffsets` guarantees a final step of exactly
-         zero and the animation does not fill, so both halves have to hold. */
-      await ready(page, '&stepMs=0');
-
-      for (let turn = 0; turn < 3; turn++) await takeTurn(page);
-
-      await expect.poll(() => stageTransform(page), { timeout: 8_000 }).toBe('none');
-      await expect
-        .poll(() => stageAnimations(page), { timeout: 8_000 })
-        .not.toContain('running');
-    });
-
-    test('is off at zero, so the harness can opt out', async ({ page }) => {
-      await ready(page, '&stepMs=0&shake=0');
-      await takeTurn(page);
-
-      expect((await effects(page)).shakes).toBe(0);
-      expect(await stageAnimations(page)).toEqual([]);
-      /* The debris is a separate switch and stays on: `?shake=0` is about the
-         frame moving, not about the fight losing its impact. */
-      expect((await effects(page)).bursts).toBeGreaterThan(0);
-    });
-
-    test('neither shake nor debris when reduced motion is requested', async ({
-      page,
-    }) => {
+    test('throws none when reduced motion is requested', async ({ page }) => {
       /* emulateMedia BEFORE ready, as everywhere else in this file: main.ts
          reads the preference once at module scope, which is before the first
          paint. */
@@ -1423,10 +1366,8 @@ test.describe('floating combat numbers', () => {
       await takeTurn(page);
 
       const after = await effects(page);
-      expect(after.shakes, 'the frame stays still').toBe(0);
-      expect(after.bursts, 'and nothing comes off the character').toBe(0);
+      expect(after.bursts, 'nothing comes off the character').toBe(0);
       expect(after.washes, 'and the frame is never washed').toBe(0);
-      expect(await stageAnimations(page)).toEqual([]);
     });
 
     test('washes the frame for a critical, and only for a critical', async ({

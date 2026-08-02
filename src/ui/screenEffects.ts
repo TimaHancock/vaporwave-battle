@@ -1,95 +1,37 @@
 /**
- * The two impact effects that live on the page rather than in the scene: the
- * screen shake, and the frame wash a critical throws.
+ * The frame wash a critical throws.
  *
- * WHY THESE ARE DOM ANIMATIONS AND THE OTHERS ARE NOT
- * ---------------------------------------------------
+ * WHY THIS IS A DOM ANIMATION AND THE REST OF THE IMPACT LAYER IS NOT
+ * -------------------------------------------------------------------
  * The recoil, the sprite flash and the shard burst are functions of age
  * against the SCENE clock, which is what lets hit-stop freeze all three by
- * simply holding that clock still. These two could have been written the same
- * way and deliberately are not, because the scene clock has a second property:
+ * simply holding that clock still. This one could have been written the same
+ * way and deliberately is not, because the scene clock has a second property:
  * `?time=` halts it, and every one of the ninety-odd e2e specs loads with
  * `?time=0`. An effect on that clock is unobservable to the whole suite.
  *
- * A Web Animations object runs on real timers regardless, so a shake can be
+ * A Web Animations object runs on real timers regardless, so the wash can be
  * watched starting and -- far more importantly -- watched FINISHING. It also
  * costs nothing to freeze: `main.ts` already pauses everything under its
- * effect roots during hit-stop, so adding the canvas and this layer to that
- * walk gives freeze-then-shake with no sequencing at all.
+ * effect roots during hit-stop, so listing this layer there gives a wash held
+ * lit for the length of the stop, with no sequencing written anywhere.
  *
- * The trade is that neither is photographable. That is the right way round:
- * a still of a shaken frame is a displaced crop, which shows nothing a still
- * of an un-shaken frame does not.
+ * A SCREEN SHAKE ALSO LIVED HERE AND WAS REMOVED. It is worth knowing it was
+ * tried: it worked, it was bounded and it was tested, and it still did not
+ * feel right in play -- the one verdict no channel here can return. See the
+ * note at the top of scene/impact.ts for what made it structurally awkward.
  *
  * NO three.js AND NO BATTLE VOCABULARY IN HERE, the same fence `floatLayer.ts`
  * keeps. It takes numbers and elements.
  */
 
-import type { ShakeStep } from '../scene/impact';
-
-/* ------------------------------------------------------------------ */
-/* Screen shake                                                        */
-/* ------------------------------------------------------------------ */
-
-/**
- * Kick an element and let it settle.
- *
- * THE CANVAS, AND NOTHING ELSE. The HUD and the float layer are the frame the
- * game is seen through, and the frame does not shake -- a player reading a
- * damage number should not have to track it. It also means no measurement in
- * the e2e suite moves: the float clearance specs measure `#floats` against
- * `#hud`, and a seven-pixel displacement of either would land inside those
- * assertions rather than beside them.
- *
- * THE LAST STEP IS THE RESTING STYLE, which is why `shakeOffsets` guarantees
- * it is exactly zero. `fill` is left at its default of `none`, so the element
- * returns to its stylesheet transform when the animation finishes -- there is
- * nothing to clean up and nothing that can leave the scene permanently off its
- * mark if a frame is dropped.
- *
- * A second hit REPLACES the shake rather than layering onto it. Two decaying
- * walks composited together produce a bigger displacement than either asked
- * for, which is how a shake escapes the bound its own zoom was sized to cover.
- */
-export function shakeElement(
-  element: Element,
-  steps: readonly ShakeStep[],
-  durationMs: number,
-): Animation | null {
-  if (steps.length === 0 || durationMs <= 0) return null;
-  if (element.animate === undefined) return null;
-
-  /* Cancel rather than let them stack. `getAnimations` on the element finds
-     only what we put there -- the canvas has no other animations -- so this
-     cannot cancel something else's work. */
-  for (const existing of element.getAnimations()) existing.cancel();
-
-  const keyframes = steps.map((step) => ({
-    transform:
-      `translate(${step.x.toFixed(3)}px, ${step.y.toFixed(3)}px) ` +
-      `scale(${step.scale.toFixed(5)})`,
-  }));
-
-  return element.animate(keyframes, {
-    duration: durationMs,
-    /* Stepped rather than eased. Interpolating smoothly between the keyframes
-       turns a series of kicks into a pan, and a pan is what a camera MOVE
-       looks like -- the one thing this scene's locked camera never does. */
-    easing: 'steps(1, end)',
-    fill: 'none',
-  });
-}
-
-/* ------------------------------------------------------------------ */
-/* Frame wash                                                          */
-/* ------------------------------------------------------------------ */
-
 /**
  * How long a critical washes the frame, in milliseconds.
  *
- * Shorter than the shake and much shorter than a shard's life. It is the first
- * thing to arrive and the first thing gone -- a wash that outlasts the freeze
- * reads as the screen having been recoloured rather than as a blow landing.
+ * Shorter than a shard's life and only a little longer than the freeze. It is
+ * the first thing to arrive and the first thing gone -- a wash that outlasts
+ * the stop reads as the screen having been recoloured rather than as a blow
+ * landing.
  */
 export const FLASH_MS = 90;
 
@@ -110,6 +52,9 @@ export function flashFrame(element: Element, durationMs = FLASH_MS): Animation |
   if (durationMs <= 0) return null;
   if (element.animate === undefined) return null;
 
+  /* Cancel rather than let them stack. Two washes compositing produce an
+     opacity neither asked for, and a second critical should restart the
+     effect, not deepen it. */
   for (const existing of element.getAnimations()) existing.cancel();
 
   return element.animate(
@@ -133,6 +78,8 @@ export function flashFrame(element: Element, durationMs = FLASH_MS): Animation |
     {
       duration: durationMs,
       easing: 'ease-out',
+      /* No fill, so a dropped frame cannot leave a permanent tint over the
+         game -- the element returns to its stylesheet opacity of 0. */
       fill: 'none',
     },
   );

@@ -26,7 +26,7 @@ import type { Vec3 } from './spriteLayout';
 /**
  * How long a shard lives, in seconds.
  *
- * Longer than the flash, the freeze and the shake, and about twice the recoil.
+ * Longer than the flash and the freeze, and about twice the recoil.
  * The debris is the last thing still moving after a blow, which is what makes
  * the hit feel like it had consequences rather than like it was a state
  * change -- but short enough that two hits in quick succession do not build up

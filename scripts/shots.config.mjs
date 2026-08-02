@@ -209,7 +209,7 @@ export const SHOTS = [
     description:
       'The frozen impact frame of a CRITICAL, with everything firing at ' +
       'once: shards mid-flight off the boss, the ember wash across the ' +
-      'frame, the canvas held at its shake offset, and the numbers open. ' +
+      'frame, and the numbers open. ' +
       'The questions no assertion can answer -- do the shards read as pieces ' +
       'coming OFF the character, or as a magic effect happening near it? Are ' +
       'they fine enough that the burst is debris rather than confetti? Does ' +
@@ -229,10 +229,8 @@ export const SHOTS = [
        both, because the flash is out by 0.12.
 
        `hitStop` freezes the DOM effects, which is what holds the 90ms ember
-       wash open long enough to be captured at all. It also holds the canvas
-       at its shake offset, so this is the true frozen impact frame rather
-       than a reconstruction of one -- exactly what hit-stop exists to let a
-       player look at.
+       wash open long enough to be captured at all -- it is gone in a tenth of
+       a second otherwise, and `settle` cannot return that fast.
 
        `floatMs` holds the numbers, as everywhere else. */
     query: 'stepMs=0&floatMs=60000&fxTime=1.15&hitStop=4000',

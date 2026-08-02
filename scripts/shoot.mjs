@@ -62,8 +62,8 @@ async function main() {
    * preference to switch the SCENE's motion off, so under this harness the
    * recoil never ran -- `impact.png` has been claiming to show a character
    * "staggered off its mark" since the day it was added, and it never once
-   * did. The screen shake and the shard burst are off under the same flag and
-   * would have gone into the same hole.
+   * did. The shard burst is off under the same flag and would have gone into
+   * the same hole.
    *
    * A shot whose subject is motion opts out. Everything else keeps the safer
    * default.
@@ -159,31 +159,6 @@ async function main() {
         await page.keyboard.press(key);
       }
       await settle();
-
-      /*
-       * Let the screen shake finish before photographing anything.
-       *
-       * The shake is a transform on the canvas, so a capture taken while one
-       * is running is a DISPLACED AND SLIGHTLY ZOOMED crop of the composition
-       * -- which would quietly change the baseline of every shot that presses
-       * a key, and change it differently each run depending on which keyframe
-       * the round trip landed on.
-       *
-       * One wait here rather than `shake=0` scattered through the manifest,
-       * because it is true of every shot and not a property of any of them. A
-       * shaken still shows nothing an un-shaken one does not: a screenshot
-       * cannot photograph a screen shaking, only a frame that has moved.
-       */
-      await page
-        .waitForFunction(
-          () =>
-            (document.querySelector('#stage')?.getAnimations() ?? []).every(
-              (animation) => animation.playState !== 'running',
-            ),
-          null,
-          { timeout: READY_TIMEOUT_MS },
-        )
-        .catch(() => {});
 
       const state = await page.evaluate(() => window.__debugState);
 

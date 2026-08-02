@@ -49,15 +49,8 @@ import { createPostProcessing } from './scene/post';
 import { loadCharacterTexture } from './scene/sprite';
 import { layoutBoss, layoutParty } from './scene/spriteLayout';
 import type { ArenaMood } from './scene/arena';
-import {
-  hasCritical,
-  hitStopFor,
-  HIT_STOP_MS,
-  SHAKE_MS,
-  shakeFor,
-  shakeOffsets,
-} from './scene/impact';
-import { flashFrame, shakeElement } from './ui/screenEffects';
+import { hasCritical, hitStopFor, HIT_STOP_MS } from './scene/impact';
+import { flashFrame } from './ui/screenEffects';
 import { BOSS, CAST, PARTY } from './scene/cast';
 import { renderHud, toHudModel } from './ui/hud';
 import {
@@ -156,24 +149,6 @@ const hitStopMs =
   prefersReducedMotion() || (isStepMode && params.get('hitStop') === null)
     ? 0
     : nonNegativeParam(params.get('hitStop')) ?? HIT_STOP_MS;
-
-/**
- * Screen-shake amplitude, as a percentage of the shipped value. Zero disables.
- *
- * ON BY DEFAULT IN STEP MODE, unlike `?hitStop=`, and the difference is not an
- * inconsistency. Hit-stop is a scene-clock effect, so on a halted clock only
- * its DOM half survives and it freezes an interface nobody is animating. The
- * shake is a Web Animations object on real timers: it runs, it finishes, and
- * it moves only the canvas -- which nothing in the suite measures. So there is
- * nothing to switch off.
- *
- * A percentage rather than a pixel count because the shipped value is itself a
- * fraction of the viewport's height; see SHAKE_FRACTION.
- */
-const SHAKE_FULL = 100;
-const shakeScale = prefersReducedMotion()
-  ? 0
-  : (nonNegativeParam(params.get('shake')) ?? SHAKE_FULL) / SHAKE_FULL;
 
 /**
  * Step mode only: the simulated time to redraw at after an action, instead of
@@ -392,9 +367,9 @@ async function main(
      * Order matters within this function, and in two places. The floats are
      * spawned first so the freeze below catches their arrival animation --
      * freeze then spawn and the number flies away during the pause that was
-     * meant to hold it. And the shake and the wash start BEFORE the freeze,
-     * for the same reason: the freeze pauses them on their first frame and
-     * holds them there, which is freeze-then-shake with no sequencing at all.
+     * meant to hold it. And the wash starts BEFORE the freeze, for the same
+     * reason: the freeze pauses it on its first frame and holds the frame lit
+     * for the length of the stop, with no sequencing written anywhere.
      */
     let landed = false;
     for (const event of fresh) {
@@ -408,30 +383,18 @@ async function main(
       );
     }
 
-    if (landed) {
-      const amplitude = shakeFor(fresh, window.innerHeight, shakeScale);
-      const steps = shakeOffsets(
-        shakeRng,
-        amplitude,
-        undefined,
-        window.innerWidth,
-        window.innerHeight,
-      );
-      if (shakeElement(canvas, steps, SHAKE_MS) !== null) shakes++;
+    /* Criticals only. A turn-based fight lands several blows a turn and a
+       full-frame flash on each is exhausting inside a minute; a critical is
+       roughly one hit in six, which is rare enough for the frame reacting to
+       it to stay an event.
 
-      /* Criticals only. A turn-based fight lands several blows a turn and a
-         full-frame flash on each is exhausting inside a minute; a critical is
-         roughly one hit in six, which is rare enough for the frame reacting to
-         it to stay an event.
-
-         Off under reduced motion, and that is THE ONE PLACE the scene layer's
-         own rule is the wrong test. The sprite flash stays on the argument
-         that a colour changing in place is not motion -- true, and beside the
-         point here: a full-frame luminance change carries a photosensitive
-         risk rather than a vestibular one. Different hazard, same switch. */
-      if (hasCritical(fresh) && !prefersReducedMotion()) {
-        if (flashFrame(flashRoot) !== null) washes++;
-      }
+       Off under reduced motion, and that is THE ONE PLACE the scene layer's
+       own rule is the wrong test. The sprite flash stays on the argument that
+       a colour changing in place is not motion -- true, and beside the point
+       here: a full-frame luminance change carries a photosensitive risk rather
+       than a vestibular one. Different hazard, same switch. */
+    if (landed && hasCritical(fresh) && !prefersReducedMotion()) {
+      if (flashFrame(flashRoot) !== null) washes++;
     }
 
     freeze(hitStopFor(fresh, hitStopMs));
@@ -454,18 +417,8 @@ async function main(
    * damage number and the chain pulse.
    */
 
-  /** How many screen shakes and frame washes have fired. For the e2e suite. */
-  let shakes = 0;
+  /** How many frame washes have fired. For the e2e suite. */
   let washes = 0;
-
-  /*
-   * A generator of its own, so a shake has variety between hits without
-   * reaching for Math.random() -- and never the battle's stream, or adding
-   * this effect would reroll every seeded fight and every screenshot baseline
-   * with it. Same seed, separate sequence: the pattern the terrain banks and
-   * the deck traces already follow.
-   */
-  const shakeRng = createRng(seed);
 
   /** Total seconds the scene clock has been held. Subtracted from every read. */
   let frozenSeconds = 0;
@@ -488,19 +441,18 @@ async function main(
 
     /*
      * These roots, not `document`. A freeze that reached everything could stop
-     * something that must never stop, and these four are exactly the transient
-     * presentation: the canvas's shake, the critical wash, the HUD's bars and
-     * pulses, and the float layer.
+     * something that must never stop, and these three are exactly the
+     * transient presentation: the critical wash, the HUD's bars and pulses,
+     * and the float layer.
      *
-     * The canvas and the wash are here rather than driven off the scene clock
-     * on purpose -- see ui/screenEffects.ts. Adding them to this walk is what
-     * makes a freeze hold a shake at peak displacement for its whole duration,
-     * which is the order hit-stop wants, with no sequencing written anywhere.
+     * The wash is here rather than driven off the scene clock on purpose --
+     * see ui/screenEffects.ts. Listing it is what makes a freeze hold the
+     * frame lit for the whole stop, with no sequencing written anywhere.
      *
      * Guarded because `getAnimations` is not universal, and an interface that
      * cannot pause should carry on rather than throw during a hit.
      */
-    for (const root of [canvas, flashRoot, hudRoot, floatRoot]) {
+    for (const root of [flashRoot, hudRoot, floatRoot]) {
       if (root.getAnimations === undefined) continue;
       for (const animation of root.getAnimations({ subtree: true })) {
         if (animation.playState !== 'running') continue;
@@ -548,9 +500,9 @@ async function main(
          * `play()` on a CANCELLED animation restarts it from zero. Two things
          * cancel while a freeze is in flight: a float removed from the DOM by
          * its own timer, which does not care about our freeze, and a second
-         * hit, which REPLACES the canvas shake rather than layering onto it.
-         * Resuming the second of those resurrects a shake that was
-         * deliberately thrown away, on top of the one that replaced it.
+         * critical, which REPLACES the frame wash rather than deepening it.
+         * Resuming the second of those resurrects a wash that was deliberately
+         * thrown away, on top of the one that replaced it.
          */
         if (animation.playState !== 'paused') continue;
         animation.play();
@@ -764,7 +716,6 @@ async function main(
       effects: {
         bursts: battle.bursts,
         shardsAlive: battle.shardsAlive,
-        shakes,
         washes,
       },
       sprites: battle.sprites.map((sprite) => {
