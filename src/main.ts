@@ -49,7 +49,15 @@ import { createPostProcessing } from './scene/post';
 import { loadCharacterTexture } from './scene/sprite';
 import { layoutBoss, layoutParty } from './scene/spriteLayout';
 import type { ArenaMood } from './scene/arena';
-import { hitStopFor, HIT_STOP_MS } from './scene/impact';
+import {
+  hasCritical,
+  hitStopFor,
+  HIT_STOP_MS,
+  SHAKE_MS,
+  shakeFor,
+  shakeOffsets,
+} from './scene/impact';
+import { flashFrame, shakeElement } from './ui/screenEffects';
 import { BOSS, CAST, PARTY } from './scene/cast';
 import { renderHud, toHudModel } from './ui/hud';
 import {
@@ -67,11 +75,12 @@ import { createRng, seedFromLocation } from './rng';
 import { publishDebugState, type DebugState } from './debug';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage');
+const flashRoot = document.querySelector<HTMLElement>('#flash');
 const hudRoot = document.querySelector<HTMLElement>('#hud');
 const floatRoot = document.querySelector<HTMLElement>('#floats');
 
-if (canvas === null || hudRoot === null || floatRoot === null) {
-  throw new Error('Expected #stage, #hud and #floats in index.html');
+if (canvas === null || flashRoot === null || hudRoot === null || floatRoot === null) {
+  throw new Error('Expected #stage, #flash, #hud and #floats in index.html');
 }
 
 /* ---------------------------------------------------------------- */
@@ -86,6 +95,8 @@ const rng = createRng(seed);
 const stepToRaw = params.get('time');
 const stepTo = stepToRaw === null ? null : Number.parseFloat(stepToRaw);
 const isStepMode = stepTo !== null && Number.isFinite(stepTo);
+/** The step-to time as a plain number, for the arithmetic that follows it. */
+const stepTime = stepTo ?? 0;
 
 /**
  * Pause between sequencer beats, in milliseconds.
@@ -147,6 +158,46 @@ const hitStopMs =
     : nonNegativeParam(params.get('hitStop')) ?? HIT_STOP_MS;
 
 /**
+ * Screen-shake amplitude, as a percentage of the shipped value. Zero disables.
+ *
+ * ON BY DEFAULT IN STEP MODE, unlike `?hitStop=`, and the difference is not an
+ * inconsistency. Hit-stop is a scene-clock effect, so on a halted clock only
+ * its DOM half survives and it freezes an interface nobody is animating. The
+ * shake is a Web Animations object on real timers: it runs, it finishes, and
+ * it moves only the canvas -- which nothing in the suite measures. So there is
+ * nothing to switch off.
+ *
+ * A percentage rather than a pixel count because the shipped value is itself a
+ * fraction of the viewport's height; see SHAKE_FRACTION.
+ */
+const SHAKE_FULL = 100;
+const shakeScale = prefersReducedMotion()
+  ? 0
+  : (nonNegativeParam(params.get('shake')) ?? SHAKE_FULL) / SHAKE_FULL;
+
+/**
+ * Step mode only: the simulated time to redraw at after an action, instead of
+ * `?time=`.
+ *
+ * WHY IT HAS TO EXIST. `?time=` holds the clock, which is exactly what lets
+ * the screenshot channel photograph the impact flash and the recoil -- both
+ * peak at age 0 and stay there. A shard burst does the opposite: at age 0
+ * every piece of debris is still at the origin, so the frame shows a dot.
+ * Without a way to look slightly later, the most art-directed part of the
+ * impact work would be unjudgeable by the only channel that can judge it --
+ * and that is precisely the argument that got the shockwave ring dropped.
+ *
+ * `?time=1.0&fxTime=1.18` steps to 1.0, acts, and draws the burst at age 0.18.
+ * One number, reproducible, and it costs the e2e suite NOTHING because the
+ * extra redraw happens only when the parameter is present -- an unconditional
+ * software render behind every hit is what tripled this suite once already.
+ */
+const fxTime = floatParam(params.get('fxTime'));
+
+/** The simulated time every step-mode redraw happens at. */
+const redrawTime = fxTime ?? stepTime;
+
+/**
  * Whether the reader has asked for less movement.
  *
  * Hit-stop goes OFF entirely when they have, and so does the recoil. That is
@@ -169,6 +220,13 @@ function nonNegativeParam(raw: string | null): number | undefined {
   if (raw === null) return undefined;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/** Parses a non-negative decimal parameter. Times are not whole milliseconds. */
+function floatParam(raw: string | null): number | null {
+  if (raw === null) return null;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 /* ---------------------------------------------------------------- */
@@ -208,6 +266,7 @@ const DISPLAY_FACES = [
    TypeScript cannot know when the function is called. */
 async function main(
   canvas: HTMLCanvasElement,
+  flashRoot: HTMLElement,
   hudRoot: HTMLElement,
   floatRoot: HTMLElement,
 ): Promise<void> {
@@ -325,25 +384,62 @@ async function main(
     /*
      * Impact, off the SAME pass over the SAME list.
      *
-     * The flinch and the number it belongs to are fired together, from one
-     * slice of one array, so they cannot disagree about what landed -- the
-     * same argument that keeps the HUD and the debug channel on one view.
+     * The flinch, the debris, the kick, the wash and the number they belong to
+     * are all fired from one slice of one array, so they cannot disagree about
+     * what landed -- the same argument that keeps the HUD and the debug
+     * channel on one view.
      *
-     * Order matters within this function: the floats are spawned first so the
-     * freeze below catches their arrival animation. Freeze then spawn and the
-     * number flies away during the pause that was meant to hold it.
+     * Order matters within this function, and in two places. The floats are
+     * spawned first so the freeze below catches their arrival animation --
+     * freeze then spawn and the number flies away during the pause that was
+     * meant to hold it. And the shake and the wash start BEFORE the freeze,
+     * for the same reason: the freeze pauses them on their first frame and
+     * holds them there, which is freeze-then-shake with no sequencing at all.
      */
+    let landed = false;
     for (const event of fresh) {
       if (event.kind !== 'damage') continue;
+      landed = true;
       battle.reactToHit(
         event.targetId,
         event.sourceId,
         event.isCritical,
-        currentTime,
+        effectTime(),
       );
     }
 
+    if (landed) {
+      const amplitude = shakeFor(fresh, window.innerHeight, shakeScale);
+      const steps = shakeOffsets(
+        shakeRng,
+        amplitude,
+        undefined,
+        window.innerWidth,
+        window.innerHeight,
+      );
+      if (shakeElement(canvas, steps, SHAKE_MS) !== null) shakes++;
+
+      /* Criticals only. A turn-based fight lands several blows a turn and a
+         full-frame flash on each is exhausting inside a minute; a critical is
+         roughly one hit in six, which is rare enough for the frame reacting to
+         it to stay an event.
+
+         Off under reduced motion, and that is THE ONE PLACE the scene layer's
+         own rule is the wrong test. The sprite flash stays on the argument
+         that a colour changing in place is not motion -- true, and beside the
+         point here: a full-frame luminance change carries a photosensitive
+         risk rather than a vestibular one. Different hazard, same switch. */
+      if (hasCritical(fresh) && !prefersReducedMotion()) {
+        if (flashFrame(flashRoot) !== null) washes++;
+      }
+    }
+
     freeze(hitStopFor(fresh, hitStopMs));
+
+    /* Only when `?fxTime=` asked for it. See the note on the parameter: an
+       unconditional redraw behind every hit is what took the e2e suite from
+       1.3 minutes to 5.4 with seven timeouts. */
+    if (landed && isStepMode && isReady && fxTime !== null) drawFrame(redrawTime);
   }
 
   /* --- Hit-stop ---------------------------------------------------- */
@@ -357,6 +453,19 @@ async function main(
    * `Animation` object like any other and pauses mid-drain along with the
    * damage number and the chain pulse.
    */
+
+  /** How many screen shakes and frame washes have fired. For the e2e suite. */
+  let shakes = 0;
+  let washes = 0;
+
+  /*
+   * A generator of its own, so a shake has variety between hits without
+   * reaching for Math.random() -- and never the battle's stream, or adding
+   * this effect would reroll every seeded fight and every screenshot baseline
+   * with it. Same seed, separate sequence: the pattern the terrain banks and
+   * the deck traces already follow.
+   */
+  const shakeRng = createRng(seed);
 
   /** Total seconds the scene clock has been held. Subtracted from every read. */
   let frozenSeconds = 0;
@@ -378,14 +487,20 @@ async function main(
     }
 
     /*
-     * Both roots, not `document`. A freeze that reached everything could stop
-     * something that must never stop, and the two roots are exactly the
-     * transient interface: the HUD's bars and pulses, and the float layer.
+     * These roots, not `document`. A freeze that reached everything could stop
+     * something that must never stop, and these four are exactly the transient
+     * presentation: the canvas's shake, the critical wash, the HUD's bars and
+     * pulses, and the float layer.
+     *
+     * The canvas and the wash are here rather than driven off the scene clock
+     * on purpose -- see ui/screenEffects.ts. Adding them to this walk is what
+     * makes a freeze hold a shake at peak displacement for its whole duration,
+     * which is the order hit-stop wants, with no sequencing written anywhere.
      *
      * Guarded because `getAnimations` is not universal, and an interface that
      * cannot pause should carry on rather than throw during a hit.
      */
-    for (const root of [hudRoot, floatRoot]) {
+    for (const root of [canvas, flashRoot, hudRoot, floatRoot]) {
       if (root.getAnimations === undefined) continue;
       for (const animation of root.getAnimations({ subtree: true })) {
         if (animation.playState !== 'running') continue;
@@ -427,9 +542,17 @@ async function main(
   function release(): void {
     try {
       for (const animation of paused) {
-        /* A float can be removed from the DOM while paused -- its own removal
-           timer is a `setTimeout` that does not care about our freeze. Playing
-           a cancelled animation is harmless; not playing a live one is not. */
+        /*
+         * Only what is STILL paused, and the guard is not tidiness.
+         *
+         * `play()` on a CANCELLED animation restarts it from zero. Two things
+         * cancel while a freeze is in flight: a float removed from the DOM by
+         * its own timer, which does not care about our freeze, and a second
+         * hit, which REPLACES the canvas shake rather than layering onto it.
+         * Resuming the second of those resurrects a shake that was
+         * deliberately thrown away, on top of the one that replaced it.
+         */
+        if (animation.playState !== 'paused') continue;
         animation.play();
       }
     } finally {
@@ -453,6 +576,21 @@ async function main(
   function sceneTime(): number {
     if (frozenAt !== null) return frozenAt - frozenSeconds;
     return clock.getElapsedTime() - frozenSeconds;
+  }
+
+  /**
+   * The simulated time a reaction is registered at.
+   *
+   * In step mode this is `?time=` itself and NOT `currentTime`, which matters
+   * once `?fxTime=` is in play: a redraw moves `currentTime` forward, so
+   * registering against it would make the second blow of a turn start its
+   * reaction at the moment the first one was drawn -- putting every burst
+   * after the first back at age 0 and defeating the whole point of the
+   * parameter. Pinning it to the step keeps every reaction in a stepped frame
+   * on one clock.
+   */
+  function effectTime(): number {
+    return isStepMode ? stepTime : sceneTime();
   }
 
   /** The last mood applied, so `refresh` can tell when there is nothing to do. */
@@ -500,10 +638,11 @@ async function main(
        * fight had gone. The same shape as publishing debug state off the
        * loop, and for the same reason.
        *
-       * At `currentTime` rather than a fresh clock read, so ambient animation
-       * does not advance and a stepped frame stays reproducible.
+       * At a fixed simulated time rather than a fresh clock read, so ambient
+       * animation does not advance and a stepped frame stays reproducible.
+       * That is `?time=` unless `?fxTime=` has asked to look slightly later.
        */
-      if (isStepMode && isReady) drawFrame(currentTime);
+      if (isStepMode && isReady) drawFrame(redrawTime);
     }
 
     publish();
@@ -621,6 +760,12 @@ async function main(
         strength: post.params.strength,
         radius: post.params.radius,
         threshold: post.params.threshold,
+      },
+      effects: {
+        bursts: battle.bursts,
+        shardsAlive: battle.shardsAlive,
+        shakes,
+        washes,
       },
       sprites: battle.sprites.map((sprite) => {
         const head = sprite.headScreenPosition(battle.camera);
@@ -800,7 +945,7 @@ async function main(
    substitute would render as nothing at all, which in a screenshot is
    indistinguishable from a positioning bug. Rethrowing surfaces the reason
    to Playwright's pageerror hook, so the shot manifest records why. */
-void main(canvas, hudRoot, floatRoot).catch((error: unknown) => {
+void main(canvas, flashRoot, hudRoot, floatRoot).catch((error: unknown) => {
   console.error(
     'Bootstrap failed; the scene will never become ready.',
     error,

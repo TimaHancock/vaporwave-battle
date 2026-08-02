@@ -51,6 +51,33 @@ function actors(page: Page) {
   return page.evaluate(() => window.__debugState!.battle!.actors);
 }
 
+/** The impact-effect counters. See the note on `effects` in src/debug.ts. */
+function effects(page: Page) {
+  return page.evaluate(() => window.__debugState!.effects);
+}
+
+/** Play states of whatever is animating the canvas. Empty when it is at rest. */
+function stageAnimations(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(document.querySelector('#stage')?.getAnimations() ?? []).map(
+      (animation) => animation.playState,
+    ),
+  );
+}
+
+/**
+ * The canvas's computed transform.
+ *
+ * `none` is the resting value, and the shake does not fill -- so this reading
+ * anything else once every animation is done means the frame has been left off
+ * its mark, which is the failure no other channel can see.
+ */
+function stageTransform(page: Page): Promise<string> {
+  return page.evaluate(
+    () => getComputedStyle(document.querySelector('#stage')!).transform,
+  );
+}
+
 /** `rgb(...)` / `rgba(...)` as channels. Computed colours are always one of these. */
 function channels(colour: string): { r: number; g: number; b: number } {
   const [r = 0, g = 0, b = 0] = (colour.match(/[\d.]+/g) ?? []).map(Number);
@@ -1196,8 +1223,12 @@ test.describe('floating combat numbers', () => {
      * pulse, two floats" does not.
      */
     async function pausedNames(page: Page): Promise<string[]> {
+      /* All four effect roots, matching the walk in main.ts's `freeze`. The
+         canvas and the wash are on that list because the shake and the frame
+         flash are Web Animations rather than scene-clock effects -- a freeze
+         has to hold them too, and a release has to let them go. */
       return page.evaluate(() =>
-        ['#hud', '#floats']
+        ['#stage', '#flash', '#hud', '#floats']
           .flatMap((selector) =>
             Array.from(
               document.querySelector(selector)?.getAnimations({ subtree: true }) ?? [],
@@ -1286,6 +1317,31 @@ test.describe('floating combat numbers', () => {
       expect(await pausedNames(page)).toEqual([]);
     });
 
+    test('holds the screen shake too, and lets that go as well', async ({ page }) => {
+      /* The shake is a canvas transform rather than a scene-clock effect, so
+         the freeze reaches it only because main.ts lists the canvas among its
+         effect roots. Getting that wrong in the pausing direction is a shake
+         that runs THROUGH the stop -- the frame moving while the game is
+         meant to be stopped dead. Getting it wrong in the releasing direction
+         leaves the whole scene permanently off its mark, which nothing else
+         here would catch: the DOM is right, the state is right, and the
+         canvas is simply thirteen pixels to the left forever. */
+      await ready(page, '&stepMs=0&hitStop=2000');
+
+      await page.keyboard.press('Enter');
+      await expect
+        .poll(() => stageAnimations(page).then((states) => states), {
+          timeout: 5_000,
+        })
+        .toContain('paused');
+
+      await idle(page);
+      await expect
+        .poll(() => stageAnimations(page), { timeout: 8_000 })
+        .not.toContain('paused');
+      await expect.poll(() => stageTransform(page), { timeout: 8_000 }).toBe('none');
+    });
+
     test('does not freeze at all when reduced motion is requested', async ({
       page,
     }) => {
@@ -1302,6 +1358,101 @@ test.describe('floating combat numbers', () => {
 
       await page.keyboard.press('Enter');
       expect(await pausedNames(page)).toEqual([]);
+    });
+  });
+
+  test.describe('screen shake and the frame wash', () => {
+    /**
+     * The two impact effects a test can actually watch.
+     *
+     * The recoil, the sprite flash and the shard burst are all functions of
+     * age against the SCENE clock, and `?time=0` -- which every spec in this
+     * file loads with -- halts that clock. They are frozen at age 0 here by
+     * design. These two are Web Animations on real timers, so they run
+     * normally under step mode, which makes them the only part of the impact
+     * layer whose START and, far more importantly, whose END is assertable.
+     */
+
+    test('kicks the frame when a blow lands', async ({ page }) => {
+      await ready(page, '&stepMs=0');
+      expect(await effects(page)).toMatchObject({ shakes: 0, bursts: 0 });
+
+      await takeTurn(page);
+
+      const after = await effects(page);
+      expect(after.shakes, 'the frame kicked').toBeGreaterThan(0);
+      expect(after.bursts, 'and threw debris').toBeGreaterThan(0);
+    });
+
+    test('ALWAYS settles back to rest', async ({ page }) => {
+      /* THE ONE THAT MATTERS, and the same argument as hit-stop's release. A
+         shake that fails to end leaves the canvas permanently translated and
+         zoomed -- and every other channel stays green while it happens,
+         because the DOM is correct, the state is correct, and the composition
+         has simply moved. `shakeOffsets` guarantees a final step of exactly
+         zero and the animation does not fill, so both halves have to hold. */
+      await ready(page, '&stepMs=0');
+
+      for (let turn = 0; turn < 3; turn++) await takeTurn(page);
+
+      await expect.poll(() => stageTransform(page), { timeout: 8_000 }).toBe('none');
+      await expect
+        .poll(() => stageAnimations(page), { timeout: 8_000 })
+        .not.toContain('running');
+    });
+
+    test('is off at zero, so the harness can opt out', async ({ page }) => {
+      await ready(page, '&stepMs=0&shake=0');
+      await takeTurn(page);
+
+      expect((await effects(page)).shakes).toBe(0);
+      expect(await stageAnimations(page)).toEqual([]);
+      /* The debris is a separate switch and stays on: `?shake=0` is about the
+         frame moving, not about the fight losing its impact. */
+      expect((await effects(page)).bursts).toBeGreaterThan(0);
+    });
+
+    test('neither shake nor debris when reduced motion is requested', async ({
+      page,
+    }) => {
+      /* emulateMedia BEFORE ready, as everywhere else in this file: main.ts
+         reads the preference once at module scope, which is before the first
+         paint. */
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await ready(page, '&stepMs=0');
+      await takeTurn(page);
+
+      const after = await effects(page);
+      expect(after.shakes, 'the frame stays still').toBe(0);
+      expect(after.bursts, 'and nothing comes off the character').toBe(0);
+      expect(after.washes, 'and the frame is never washed').toBe(0);
+      expect(await stageAnimations(page)).toEqual([]);
+    });
+
+    test('washes the frame for a critical, and only for a critical', async ({
+      page,
+    }) => {
+      /* Derived from the log rather than from a seed known to crit on turn
+         one: a seed that stops critting is a test that stops testing anything
+         while still passing. */
+      await openBattle(page, 'seed=7&stepMs=0');
+
+      for (let turn = 0; turn < 8; turn++) {
+        const critical = await page.evaluate(() =>
+          window.__debugState!.battle!.log.some((event) => event['isCritical'] === true),
+        );
+        const { washes } = await effects(page);
+
+        if (critical) {
+          expect(washes, 'a critical has landed').toBeGreaterThan(0);
+          return;
+        }
+
+        expect(washes, 'nothing but ordinary hits so far').toBe(0);
+        await takeTurn(page);
+      }
+
+      throw new Error('no critical landed in eight turns -- the test proved nothing');
     });
   });
 

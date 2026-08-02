@@ -254,6 +254,44 @@ body {
   height: 100%;
 }
 
+/*
+ * The frame wash a critical throws.
+ *
+ * BETWEEN the canvas and the HUD, which is what its position in index.html
+ * buys and why it carries no z-index: over the scene so the wash is part of
+ * the picture, under the interface so it can never make a card unreadable at
+ * the moment the player is reading one.
+ *
+ * Resting opacity is 0 and the animation returns it there -- `fill: none`, so
+ * a dropped frame cannot leave a permanent tint over the game.
+ *
+ * Ember, not damage red. The --fx-* palette is fenced to `.hud-float`; this is
+ * a wash across the whole picture, so it takes the brand colour the arena's
+ * own heat ramp already runs toward. A radial falloff rather than a flat fill,
+ * because a flat sheet reads as a page transition while a bloom out of the
+ * middle reads as light coming off the impact.
+ */
+#flash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  /*
+   * `closest-side`, and it is not a detail. A radial-gradient sizes itself to
+   * the FARTHEST CORNER by default, so a stop at 72% still reaches most of a
+   * 16:9 frame -- the first version lifted the sun, the far mountains and the
+   * party member in the opposite corner, which is a colour grade rather than
+   * a flash. Sizing to the nearest edge keeps the light where the fight is and
+   * leaves the corners at the value they were authored at.
+   */
+  background: radial-gradient(
+    circle closest-side at 50% 45%,
+    color-mix(in srgb, var(--ember) 40%, transparent),
+    color-mix(in srgb, var(--horizon) 14%, transparent) 50%,
+    transparent 85%
+  );
+}
+
 #hud {
   position: fixed;
   inset: 0;

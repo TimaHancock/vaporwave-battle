@@ -360,6 +360,17 @@ export const SHADOW_RENDER_ORDER = 1;
 export const SPRITE_RENDER_ORDER_BASE = 10;
 
 /**
+ * Impact debris, above every sprite.
+ *
+ * Clear of the top of the sprite range rather than one past it, so adding a
+ * sixth or seventh character cannot quietly overtake the shards -- a burst
+ * drawn behind the character it came off reads as the effect having missed.
+ * It is additive and writes no depth, so nothing occludes it and there is
+ * nothing to sort it against; the only question is that it comes last.
+ */
+export const BURST_RENDER_ORDER = 100;
+
+/**
  * THE TRANSPARENCY SORTING TRAP.
  *
  * three.js sorts transparent objects by the distance from the camera to

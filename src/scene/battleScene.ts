@@ -14,14 +14,19 @@
 import * as THREE from 'three';
 import { createRng, type Rng } from '../rng';
 import { createCharacterSprite, type CharacterSprite } from './sprite';
-import { assignRenderOrders, type Vec3 } from './spriteLayout';
+import {
+  assignRenderOrders,
+  BURST_RENDER_ORDER,
+  type Vec3,
+} from './spriteLayout';
 import {
   buildBank,
   frameHalfWidth,
   terrainIndices,
   type BankOptions,
 } from './mountains';
-import { recoilDirection } from './impact';
+import { recoilDirection, shardCountFor } from './impact';
+import { shardAt, spawnShards, type Shard } from './burst';
 import {
   arenaEmission,
   colonnadePositions,
@@ -114,6 +119,53 @@ export const PALETTE = {
  * started -- the same reason the rim keeps its rest colour.
  */
 const DECK_EMISSIVE_REST = 0.3;
+
+/* ------------------------------------------------------------------ */
+/* Impact debris                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How many shards the pool can hold at once.
+ *
+ * A critical throws 28 and the sequencer can commit two blows in a turn, so
+ * this is roughly three overlapping criticals' worth. Fixed rather than grown
+ * on demand because an InstancedMesh's capacity is baked into its buffers --
+ * resizing means new GPU allocations mid-fight, which is exactly what the
+ * DisposalRegistry exists to keep countable.
+ *
+ * Overflowing DROPS the newest shards rather than the oldest. A burst already
+ * on screen mid-flight is a thing the player is watching; truncating the tail
+ * of a new one is invisible at these counts.
+ */
+const SHARD_CAPACITY = 96;
+
+/**
+ * How far past white a shard burns at the moment of impact.
+ *
+ * Deliberately past 1 and into HDR, which is what the bloom pass is looking
+ * for: magenta at its authored value has a luminance of about 0.29 against a
+ * 0.68 threshold, so an unscaled shard is a small dark chip rather than a
+ * spark. Scaling it means the burst GLOWS at impact and cools below the
+ * threshold as it fades, so the bloom does the work of the fade for free.
+ *
+ * THE SAME TUNING CAUTION AS THE IMPACT FLASH, and it turned out to matter
+ * here too: at 3 the shards clipped to white and, because they are additive
+ * and start on top of one another, the overlapping ones summed past that into
+ * a single blown-out blob with no pieces in it. A hair over the threshold, not
+ * far over -- the colour is the only thing distinguishing a hit from a
+ * critical here, and white is neither.
+ */
+const SHARD_EMISSION = 2.2;
+
+/** One shard in flight, and where it came from. */
+interface LiveShard {
+  shard: Shard;
+  /** Scene-clock time the blow landed, in seconds. */
+  at: number;
+  /** Impact point in world space. Poses from `burst.ts` are relative to it. */
+  origin: Vec3;
+  colour: THREE.Color;
+}
 
 /* ------------------------------------------------------------------ */
 /* Disposal registry                                                   */
@@ -228,6 +280,18 @@ export interface BattleScene {
    * flinch is not worth taking the frame down for.
    */
   reactToHit(targetId: string, sourceId: string, isCritical: boolean, at: number): void;
+  /**
+   * How many shard bursts have been fired since the scene was built.
+   *
+   * Published because the burst is otherwise INVISIBLE to every channel but
+   * the screenshot. It is driven by the scene clock, and the e2e suite halts
+   * that clock with `?time=0` -- so a burst there is spawned, sits at age 0
+   * and never moves. A counter is the only thing an assertion can hold on to,
+   * and "a hit fires a burst; reduced motion fires none" is worth holding.
+   */
+  readonly bursts: number;
+  /** How many shards are currently in the air. */
+  readonly shardsAlive: number;
   dispose(): void;
 }
 
@@ -820,6 +884,123 @@ export function createBattleScene(rng: Rng): BattleScene {
 
   scene.add(new THREE.AmbientLight(PALETTE.ember, 0.25));
 
+  /* --- Impact debris ------------------------------------------------- */
+  /*
+   * One pooled InstancedMesh for every burst in the game, not one mesh per
+   * blow. A hit is a frequent event in a turn-based fight and allocating
+   * geometry per hit would put a GPU allocation on the critical path of the
+   * one moment that is meant to feel immediate -- and every one of them would
+   * have to reach the DisposalRegistry or leak.
+   *
+   * DOUBLE-SIDED, and that is not a detail. A shard tumbles on all three axes,
+   * so a single-sided quad is invisible for half of its own rotation -- which
+   * does not read as a lighting bug, it reads as the debris flickering.
+   *
+   * Frustum culling OFF. An InstancedMesh's bounding sphere is computed from
+   * its geometry, not from where the instances have been moved to, so a burst
+   * whose shards fly past that sphere is culled wholesale and the effect
+   * vanishes for no visible reason. The mesh is one draw call at the centre of
+   * frame; there is nothing to save by culling it.
+   */
+  const shardGeometry = registry.track(new THREE.PlaneGeometry(1, 1));
+  const shardMaterial = registry.track(
+    new THREE.MeshBasicMaterial({
+      /* White, so `instanceColor` carries both the hue and the fade. */
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      /* Additive, so fading a shard's colour to black IS fading it out -- no
+         per-instance opacity, and therefore no custom shader. It also means
+         the debris adds light to the scene rather than cutting holes in it,
+         which is the right model for neon. */
+      blending: THREE.AdditiveBlending,
+      /* Nothing occludes an additive spark, and writing depth would let one
+         shard cut a hole in the character behind it. */
+      depthWrite: false,
+      depthTest: true,
+      fog: false,
+    }),
+  );
+
+  const shardField = new THREE.InstancedMesh(
+    shardGeometry,
+    shardMaterial,
+    SHARD_CAPACITY,
+  );
+  shardField.name = 'impact-shards';
+  shardField.renderOrder = BURST_RENDER_ORDER;
+  shardField.frustumCulled = false;
+  shardField.visible = false;
+  shardField.count = 0;
+  /* Allocate the colour attribute up front. `setColorAt` creates it lazily, so
+     a field that is never coloured has no `instanceColor` at all and three
+     compiles a program without the instancing-colour define -- after which the
+     first coloured shard silently draws white. */
+  const shardColour = new THREE.Color();
+  for (let i = 0; i < SHARD_CAPACITY; i++) shardField.setColorAt(i, shardColour);
+  scene.add(shardField);
+
+  /* A generator of its own, from the same seed -- the pattern the banks and
+     the deck already follow. Sharing the scene's stream would make the debris
+     depend on how many draws construction happened to take, so adding a
+     decorative flicker would change every burst in the game. */
+  const burstRng = createRng(rng.seed);
+
+  const shards: LiveShard[] = [];
+  let bursts = 0;
+
+  /* Reused rather than allocated per shard per frame: at 96 instances and 60
+     frames a second that is 5,760 throwaway objects, and the garbage they make
+     lands during the one effect that is supposed to feel smooth. */
+  const shardDummy = new THREE.Object3D();
+
+  function updateShards(now: number): void {
+    if (shards.length === 0) {
+      if (shardField.visible) {
+        shardField.visible = false;
+        shardField.count = 0;
+      }
+      return;
+    }
+
+    let drawn = 0;
+
+    /* Backwards, so removing a retired shard cannot skip the one after it. */
+    for (let i = shards.length - 1; i >= 0; i--) {
+      const live = shards[i]!;
+      const pose = shardAt(live.shard, now - live.at);
+
+      /* Null is the retirement signal, and it comes from the curve rather than
+         from a duration held here -- one copy of "how long a shard lives". */
+      if (pose === null) {
+        shards.splice(i, 1);
+        continue;
+      }
+
+      shardDummy.position.set(
+        live.origin.x + pose.x,
+        live.origin.y + pose.y,
+        live.origin.z + pose.z,
+      );
+      shardDummy.rotation.set(pose.rx, pose.ry, pose.rz);
+      shardDummy.scale.setScalar(live.shard.size * 2);
+      shardDummy.updateMatrix();
+      shardField.setMatrixAt(drawn, shardDummy.matrix);
+
+      shardColour
+        .copy(live.colour)
+        .multiplyScalar(pose.fade * SHARD_EMISSION);
+      shardField.setColorAt(drawn, shardColour);
+
+      drawn++;
+    }
+
+    shardField.count = drawn;
+    shardField.visible = drawn > 0;
+    shardField.instanceMatrix.needsUpdate = true;
+    if (shardField.instanceColor !== null) shardField.instanceColor.needsUpdate = true;
+  }
+
   /* --- Character cast ----------------------------------------------- */
 
   /* Sprites are tracked separately from the environment registry because
@@ -834,6 +1015,12 @@ export function createBattleScene(rng: Rng): BattleScene {
       sprite.dispose();
     }
     cast.length = 0;
+    /* Debris outliving the character it came off would hang in the air over an
+       empty stage when a battle restarts -- the burst is anchored to a world
+       position, so nothing else would ever clear it. */
+    shards.length = 0;
+    shardField.visible = false;
+    shardField.count = 0;
   };
 
   return {
@@ -891,6 +1078,14 @@ export function createBattleScene(rng: Rng): BattleScene {
       deckMaterial.emissiveIntensity = DECK_EMISSIVE_REST * deck;
     },
 
+    get bursts() {
+      return bursts;
+    },
+
+    get shardsAlive() {
+      return shards.length;
+    },
+
     reactToHit(targetId, sourceId, isCritical, at) {
       const target = cast.find((sprite) => sprite.name === targetId);
       if (target === undefined) return;
@@ -906,13 +1101,50 @@ export function createBattleScene(rng: Rng): BattleScene {
       );
 
       target.react(isCritical ? 'critical' : 'hit', direction, at);
+
+      /* Debris, off the same event and in the same direction as the stagger.
+         Off under reduced motion with the recoil: a cloud of tumbling
+         fragments is the most literal motion in the game. */
+      if (!allowMotion) return;
+
+      /* At the chest, not the head or the feet. A blow lands on the body, and
+         a burst at the head reads as a thought bubble while one at the feet
+         reads as the floor giving way. */
+      const origin: Vec3 = {
+        x: target.group.position.x,
+        y: target.contentHeight * 0.55,
+        z: target.group.position.z,
+      };
+
+      /* Magenta for a hit and ember for a critical -- the arena's own heat
+         ramp, and the same pair the rim and the collars travel between. NOT
+         the --fx-* effect palette: that is fenced to `.hud-float` precisely so
+         off-brand pixels cannot leak into the scene, where the character-art
+         adherence check would then score them as on-brand. */
+      const colour = new THREE.Color(isCritical ? PALETTE.ember : PALETTE.horizon);
+
+      /* Truncated at capacity rather than evicting: a burst already in flight
+         is something the player is watching, and dropping the tail of a new
+         one is invisible at these counts. */
+      const room = SHARD_CAPACITY - shards.length;
+      if (room <= 0) return;
+
+      const spawned = spawnShards(
+        burstRng,
+        Math.min(shardCountFor(isCritical), room),
+        direction,
+      );
+      for (const shard of spawned) shards.push({ shard, at, origin, colour });
+      bursts++;
     },
 
     update(elapsedSeconds: number) {
       /* Reactions run off the SAME clock as the dice, which is what makes
          hit-stop free: main.ts holds this value still during a freeze, so the
-         flash stays lit and the stagger does not start until it releases. */
+         flash stays lit, the stagger does not start until it releases, and the
+         debris hangs in the air for exactly as long as the game is stopped. */
       for (const sprite of cast) sprite.updateReaction(elapsedSeconds, allowMotion);
+      updateShards(elapsedSeconds);
 
       for (const die of dice) {
         const spin = die.userData['spin'] as number;
@@ -928,6 +1160,11 @@ export function createBattleScene(rng: Rng): BattleScene {
       /* Cast first: its textures are not in the environment registry, so
          disposing the registry alone would leak every character texture. */
       clearCast();
+      /* The InstancedMesh owns per-instance buffers that are NOT its geometry,
+         so the registry's hold on the geometry and material does not cover
+         them. */
+      shards.length = 0;
+      shardField.dispose();
       scene.clear();
       registry.disposeAll();
     },

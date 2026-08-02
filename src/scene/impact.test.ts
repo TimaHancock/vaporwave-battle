@@ -3,6 +3,7 @@ import {
   CRITICAL_MULTIPLIER,
   FLASH_SECONDS,
   flashStrength,
+  hasCritical,
   HIT_STOP_MS,
   hitStopFor,
   RECOIL_BASE,
@@ -10,10 +11,20 @@ import {
   RECOIL_SECONDS,
   recoilDirection,
   recoilOffset,
+  SHAKE_FRACTION,
+  SHAKE_STEPS,
+  shakeFor,
+  shakeOffsets,
+  SHARDS_PER_HIT,
+  shardCountFor,
 } from './impact';
 import { DAIS_FACETS, inscribedRadius } from './arena';
 import { PLATFORM_RADIUS, PLATFORM_SAFE_RADIUS } from './spriteLayout';
+import { createRng } from '../rng';
 import type { BattleEvent } from '../battle/types';
+
+/** The frame the composition is authored for, and the one the e2e suite pins. */
+const FRAME = { width: 1280, height: 720 };
 
 /**
  * Impact feel, asserted where it is cheap.
@@ -180,5 +191,156 @@ describe('flashStrength', () => {
   it('returns a number for nonsense input', () => {
     expect(flashStrength(Number.NaN)).toBe(0);
     expect(flashStrength(0.05, 0)).toBe(0);
+  });
+});
+
+describe('shakeFor', () => {
+  it('does not shake on a commit that landed nothing', () => {
+    expect(shakeFor([], FRAME.height)).toBe(0);
+    expect(
+      shakeFor(
+        [{ kind: 'heal', sourceId: 'lyra', targetId: 'kira', amount: 90 }],
+        FRAME.height,
+      ),
+    ).toBe(0);
+  });
+
+  it('shakes ONCE for a commit that landed twice', () => {
+    /* Same argument as hitStopFor. Two kicks back to back read as a stutter,
+       which is the frame rate dropping, not a blow landing. */
+    const one = shakeFor([damage(120)], FRAME.height);
+    expect(shakeFor([damage(120), damage(140)], FRAME.height)).toBe(one);
+  });
+
+  it('kicks harder when any hit in the commit was critical', () => {
+    const ordinary = shakeFor([damage(120)], FRAME.height);
+    expect(shakeFor([damage(300, true)], FRAME.height)).toBe(
+      ordinary * CRITICAL_MULTIPLIER,
+    );
+    /* Whichever order they landed in. */
+    expect(shakeFor([damage(120), damage(300, true)], FRAME.height)).toBe(
+      ordinary * CRITICAL_MULTIPLIER,
+    );
+    expect(shakeFor([damage(300, true), damage(120)], FRAME.height)).toBe(
+      ordinary * CRITICAL_MULTIPLIER,
+    );
+  });
+
+  it('scales with the viewport rather than being a pixel count', () => {
+    /* The same fight is played at 720p and at 4K, and a shake fixed in pixels
+       is a different shake at each. */
+    expect(shakeFor([damage(120)], 720)).toBeCloseTo(720 * SHAKE_FRACTION, 10);
+    expect(shakeFor([damage(120)], 1440)).toBeCloseTo(1440 * SHAKE_FRACTION, 10);
+  });
+
+  it('is genuinely disabled at zero, not merely shrunk', () => {
+    /* `?shake=0` is what anyone who dislikes the effect will reach for. */
+    expect(shakeFor([damage(300, true)], FRAME.height, 0)).toBe(0);
+  });
+
+  it('refuses a nonsense scale or viewport rather than producing NaN', () => {
+    /* The scale arrives from a URL parameter and the height from the window.
+       A NaN here becomes a `translate(NaNpx)`, which the browser drops
+       silently -- so the shake would simply stop working with no error. */
+    expect(shakeFor([damage(120)], FRAME.height, Number.NaN)).toBe(0);
+    expect(shakeFor([damage(120)], Number.NaN)).toBe(0);
+    expect(shakeFor([damage(120)], 0)).toBe(0);
+    expect(shakeFor([damage(120)], FRAME.height, -2)).toBe(0);
+  });
+});
+
+describe('shakeOffsets', () => {
+  const amplitude = shakeFor([damage(300, true)], FRAME.height);
+
+  function steps() {
+    return shakeOffsets(
+      createRng(1337),
+      amplitude,
+      SHAKE_STEPS,
+      FRAME.width,
+      FRAME.height,
+    );
+  }
+
+  it('ends at rest', () => {
+    /* THE ONE THAT MATTERS. A shake that ends anywhere but zero leaves the
+       scene permanently off its mark -- and because the last keyframe becomes
+       the resting style, nothing afterwards would ever put it back. Every
+       frame of the rest of the fight would be shifted, and no other channel
+       would call it a bug. */
+    const last = steps().at(-1);
+    expect(last).toBeDefined();
+    expect(last!.x).toBe(0);
+    expect(last!.y).toBe(0);
+    expect(last!.scale).toBe(1);
+  });
+
+  it('kicks hardest first and decays without turning back', () => {
+    let previous = Number.POSITIVE_INFINITY;
+    for (const [index, step] of steps().entries()) {
+      const reach = Math.hypot(step.x, step.y);
+      expect(reach, `step ${index}`).toBeLessThanOrEqual(previous + 1e-9);
+      previous = reach;
+    }
+    expect(Math.hypot(steps()[0]!.x, steps()[0]!.y)).toBeCloseTo(amplitude, 6);
+  });
+
+  it('never exceeds the amplitude it was given', () => {
+    for (const step of steps()) {
+      expect(Math.hypot(step.x, step.y)).toBeLessThanOrEqual(amplitude + 1e-9);
+    }
+  });
+
+  it('always zooms enough to cover its own displacement', () => {
+    /* THE ASSERTION THAT SAYS NO FRAME EDGE CAN BE EXPOSED. #stage is
+       `position: fixed; inset: 0`, so it is exactly the viewport -- translate
+       it without growing it and a strip of page background shows along one
+       edge. A black band flickering at the edge of frame for a fifth of a
+       second reads as a rendering fault, not as impact. */
+    for (const step of steps()) {
+      const grownWidth = FRAME.width * step.scale;
+      const grownHeight = FRAME.height * step.scale;
+      const spareX = (grownWidth - FRAME.width) / 2;
+      const spareY = (grownHeight - FRAME.height) / 2;
+      expect(Math.abs(step.x)).toBeLessThanOrEqual(spareX + 1e-9);
+      expect(Math.abs(step.y)).toBeLessThanOrEqual(spareY + 1e-9);
+    }
+  });
+
+  it('is the same shake for the same seed', () => {
+    expect(steps()).toEqual(steps());
+    expect(
+      shakeOffsets(createRng(9), amplitude, SHAKE_STEPS, FRAME.width, FRAME.height),
+    ).not.toEqual(steps());
+  });
+
+  it('produces nothing rather than a broken animation for nonsense input', () => {
+    expect(shakeOffsets(createRng(1), 0)).toEqual([]);
+    expect(shakeOffsets(createRng(1), Number.NaN)).toEqual([]);
+    expect(shakeOffsets(createRng(1), 10, 1)).toEqual([]);
+  });
+});
+
+describe('shardCountFor', () => {
+  it('throws more debris off a critical', () => {
+    /* A critical should differ in KIND, not only in degree: it freezes longer,
+       kicks the frame harder, washes the screen and comes apart more. */
+    expect(shardCountFor(false)).toBe(SHARDS_PER_HIT);
+    expect(shardCountFor(true)).toBe(SHARDS_PER_HIT * CRITICAL_MULTIPLIER);
+  });
+});
+
+describe('hasCritical', () => {
+  it('finds a critical anywhere in the commit', () => {
+    expect(hasCritical([])).toBe(false);
+    expect(hasCritical([damage(120)])).toBe(false);
+    expect(hasCritical([damage(120), damage(300, true)])).toBe(true);
+  });
+
+  it('ignores everything that is not a landed blow', () => {
+    /* The frame wash keys off this, and a wash on a heal would be nonsense. */
+    expect(
+      hasCritical([{ kind: 'heal', sourceId: 'lyra', targetId: 'kira', amount: 90 }]),
+    ).toBe(false);
   });
 });

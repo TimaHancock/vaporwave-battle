@@ -194,8 +194,53 @@ export const SHOTS = [
     query: 'stepMs=0&floatMs=60000',
     keys: ['Enter'],
     settle: true,
+    /* THE RECOIL WAS NEVER IN THIS SHOT UNTIL NOW. The harness forced reduced
+       motion on every context, and both main.ts and battleScene.ts read that
+       preference to switch the scene's motion off -- so this photographed the
+       flash on a character standing perfectly still, while the description
+       above claimed a stagger. Opting out is what makes the shot mean what it
+       has always said it meant. */
+    reducedMotion: 'no-preference',
     viewport: { width: 2560, height: 1440 },
     clip: { x: 0.4, y: 0.1, width: 0.6, height: 0.62 },
+  },
+  {
+    name: 'critical',
+    description:
+      'The frozen impact frame of a CRITICAL, with everything firing at ' +
+      'once: shards mid-flight off the boss, the ember wash across the ' +
+      'frame, the canvas held at its shake offset, and the numbers open. ' +
+      'The questions no assertion can answer -- do the shards read as pieces ' +
+      'coming OFF the character, or as a magic effect happening near it? Are ' +
+      'they fine enough that the burst is debris rather than confetti? Does ' +
+      'the wash light the picture or sit in front of it as a sheet? Is ember ' +
+      'still distinguishable from the sun behind it? And does the bloom ' +
+      'pick the shards up as sparks, or smear them into one blob?',
+    seed: 7,
+    time: 1.0,
+    /* THREE PARAMETERS DOING THREE DIFFERENT JOBS, and each is the only way to
+       photograph the thing it holds:
+
+       `fxTime` redraws the stepped frame at 1.15 rather than 1.0, which puts
+       the burst at age 0.15. Every other impact curve peaks at age 0 and can
+       be caught by `?time=` alone; a burst at age 0 is every shard still at
+       the origin, which is a dot. The `impact` shot above is the age-0 half of
+       this pair and this is the slightly-later half -- one frame cannot be
+       both, because the flash is out by 0.12.
+
+       `hitStop` freezes the DOM effects, which is what holds the 90ms ember
+       wash open long enough to be captured at all. It also holds the canvas
+       at its shake offset, so this is the true frozen impact frame rather
+       than a reconstruction of one -- exactly what hit-stop exists to let a
+       player look at.
+
+       `floatMs` holds the numbers, as everywhere else. */
+    query: 'stepMs=0&floatMs=60000&fxTime=1.15&hitStop=4000',
+    keys: ['Enter'],
+    settle: true,
+    reducedMotion: 'no-preference',
+    viewport: { width: 2560, height: 1440 },
+    clip: { x: 0.4, y: 0.06, width: 0.6, height: 0.66 },
   },
   {
     name: 'damage_numbers',

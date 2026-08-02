@@ -43,6 +43,37 @@ export interface DebugState {
   post: { strength: number; radius: number; threshold: number };
 
   /**
+   * Impact effects, as counters.
+   *
+   * REPORTED BECAUSE THEY ARE OTHERWISE UNASSERTABLE. The shard burst is
+   * driven by the scene clock, and `?time=0` -- which every e2e spec loads
+   * with -- halts that clock, so a burst there is spawned and then sits at age
+   * 0 forever. A screenshot can show it; nothing else can, and "a hit throws
+   * debris, and reduced motion throws none" is worth being able to say.
+   *
+   * The shake is the mirror image: it runs on real timers, so an assertion CAN
+   * watch it start and finish, but nothing about it is visible in the DOM or
+   * the state. The counter is the only durable trace either one leaves.
+   */
+  effects: {
+    /** Shard bursts fired since boot. */
+    bursts: number;
+    /** Shards currently in the air. Recomputed on each rendered frame. */
+    shardsAlive: number;
+    /** Screen shakes started since boot. */
+    shakes: number;
+    /**
+     * Frame washes started since boot -- one per commit that landed a
+     * critical.
+     *
+     * Counted rather than looked for in the DOM because the wash is 90ms long
+     * and does not fill: by the time an assertion could poll for it, the
+     * browser has already dropped the finished animation off the element.
+     */
+    washes: number;
+  };
+
+  /**
    * Character sprites currently on the platform.
    *
    * This is the channel that makes the sprite layer verifiable without

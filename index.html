@@ -16,6 +16,9 @@
         #stage  — the three.js canvas. Environment geometry and, from
                   Phase 4c, sprite billboards for the characters.
 
+        #flash  — the frame wash a critical throws. Nothing else ever
+                  goes in here.
+
         #hud    — ordinary DOM, layered on top. All menus, bars, text and
                   numbers live here. Never render UI inside three.js.
 
@@ -34,8 +37,17 @@
       different lifecycles: #hud is a pure function of battle state, while a
       float is fired by an event and cannot be re-derived from the state it
       leaves behind.
+
+      #flash sits BETWEEN the canvas and the HUD, and its place in this list
+      is the whole of its design. Over the scene, so a critical's wash is part
+      of the picture rather than a sheet in front of it; under the interface,
+      so it can never make a card or a line of narration unreadable at the
+      moment the player is reading one. It cannot live inside #hud — renderHud
+      calls replaceChildren() on that root — and it must not live inside
+      #floats, which is deliberately layered above the HUD.
     -->
     <canvas id="stage"></canvas>
+    <div id="flash"></div>
     <div id="hud"></div>
     <div id="floats"></div>
 
